@@ -2,12 +2,16 @@
 
 import threading
 from pathlib import Path
-from typing import Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
+import httpx
+from fastapi import Depends, FastAPI, Request
+from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader
+from pydantic import BaseModel
+
+from .dependencies import LLMConfig, get_llm_config
 
 
 # Locate package static/template directories
@@ -20,6 +24,16 @@ _route_lock = threading.Lock()
 
 # Track which apps have LLM docs setup to avoid duplicate routes
 _llm_apps: Set[str] = set()
+
+
+class _LLMChatMessage(BaseModel):
+    role: str
+    content: str
+
+
+class LLMChatRequest(BaseModel):
+    messages: List[_LLMChatMessage]
+    openapi_summary: str = ""
 
 
 def get_swagger_ui_html(
@@ -136,3 +150,68 @@ def setup_llm_docs(
             llm_layout_js_url="/swagger-llm-static/llm-layout-plugin.js",
             debug=debug,
         )
+
+    # Register the /llm-chat proxy endpoint (SSE streaming)
+    @app.post("/llm-chat", include_in_schema=False)
+    async def llm_chat(
+        body: LLMChatRequest,
+        llm: LLMConfig = Depends(get_llm_config),
+    ):
+        """Proxy chat requests to the configured LLM with streaming SSE."""
+        import json as _json
+
+        url = llm.base_url.rstrip("/") + "/chat/completions"
+        headers: Dict[str, str] = {"Content-Type": "application/json"}
+        if llm.api_key:
+            headers["Authorization"] = f"Bearer {llm.api_key}"
+
+        # Build messages with OpenAPI system context
+        messages: List[Dict[str, str]] = []
+        if body.openapi_summary:
+            messages.append({
+                "role": "system",
+                "content": (
+                    "You are a helpful API assistant. The user is looking at an API "
+                    "documentation page. Here is a summary of the available API:\n\n"
+                    + body.openapi_summary
+                    + "\n\nHelp the user understand and use these endpoints. "
+                    "When appropriate, provide example curl commands or code snippets."
+                ),
+            })
+        for msg in body.messages:
+            messages.append({"role": msg.role, "content": msg.content})
+
+        payload: Dict[str, Any] = {
+            "model": llm.model_id,
+            "messages": messages,
+            "max_tokens": llm.max_tokens,
+            "temperature": llm.temperature,
+            "stream": True,
+        }
+
+        async def stream_response():
+            try:
+                async with httpx.AsyncClient(timeout=60) as client:
+                    async with client.stream("POST", url, headers=headers, json=payload) as response:
+                        if response.status_code != 200:
+                            error_text = await response.aread()
+                            yield f"data: {_json.dumps({'error': f'HTTP {response.status_code}', 'details': error_text.decode()})}\n\n"
+                            return
+
+                        async for line in response.aiter_lines():
+                            if not line:
+                                continue
+                            if line.startswith("data: "):
+                                data = line[6:]
+                                if data == "[DONE]":
+                                    yield "data: [DONE]\n\n"
+                                else:
+                                    try:
+                                        chunk = _json.loads(data)
+                                        yield f"data: {_json.dumps(chunk)}\n\n"
+                                    except _json.JSONDecodeError:
+                                        yield f"data: {data}\n\n"
+            except httpx.RequestError as exc:
+                yield f"data: {_json.dumps({'error': 'Request failed', 'details': str(exc), 'url': url})}\n\n"
+
+        return StreamingResponse(stream_response(), media_type="text/event-stream")

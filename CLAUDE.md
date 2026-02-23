@@ -2,67 +2,50 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## What This Project Is
+
+`swagger-llm-ui` is a Python package that replaces FastAPI's default `/docs` page with an LLM-enhanced Swagger UI. It injects a settings panel, chat interface, and code export tools via Swagger UI plugins. Users configure LLM credentials in-browser; those are persisted in localStorage and forwarded as `X-LLM-*` headers on every API call.
+
 ## Commands
 
 ```bash
-# Install in editable mode with dev dependencies
+# Install with dev dependencies
 pip install -e ".[dev]"
 
 # Run all tests
 pytest tests/
 
 # Run a single test
-pytest tests/test_plugin.py::test_docs_route_exists
+pytest tests/test_plugin.py::test_name -v
 
-# Run the demo server
+# Run demo server
 uvicorn examples.demo_server:app --reload
-
-# Build the package
-python -m build
 ```
 
 ## Architecture
 
-`swagger-llm-ui` is a Python package that injects an LLM settings panel into FastAPI's Swagger UI. It uses a **src layout** with the package at `src/swagger_llm_ui/`.
+**Python backend** (`src/swagger_llm_ui/`):
+- `plugin.py` — `setup_llm_docs(app)` removes default `/docs` and `/redoc` routes, mounts static files at `/swagger-llm-static`, registers a custom `/docs` route (Jinja2-rendered), and a `/llm-chat` proxy endpoint. Thread-safe via `threading.Lock`.
+- `dependencies.py` — `LLMConfig` dataclass + `get_llm_config()` FastAPI dependency that extracts `X-LLM-*` headers from requests with type coercion and defaults.
+- `__init__.py` — Public API: `setup_llm_docs`, `get_swagger_ui_html`, `LLMConfig`, `get_llm_config`.
 
-### How it works
+**JavaScript plugins** (`src/swagger_llm_ui/static/`):
+- `llm-settings-plugin.js` — Swagger UI plugin with Redux-style state management. Renders settings form, provider presets, connection tester, and chat panel. Persists to localStorage keys `swagger-llm-settings` and `swagger-llm-chat-history`.
+- `llm-layout-plugin.js` — Wraps Swagger UI's BaseLayout with LLMSettingsPanel and tab navigation (API Explorer / Chat).
+- `code-export-plugin.js` — OpenAPI schema parser and code generators (curl, Python httpx, JS fetch).
 
-The package has two integration points:
+**Template** (`src/swagger_llm_ui/templates/swagger_ui.html`):
+- Jinja2 template that loads Swagger UI from CDN, injects plugin scripts, embeds CSS (dark theme, provider badges), and configures the request interceptor that reads localStorage and adds `X-LLM-*` headers.
 
-1. **Python side** (`plugin.py`, `dependencies.py`): `setup_llm_docs()` removes FastAPI's default `/docs` route, mounts the package's static JS files at `/swagger-llm-static`, and registers a replacement `/docs` route that serves a custom Jinja2 HTML template. The `get_llm_config()` FastAPI dependency extracts `X-LLM-*` request headers into an `LLMConfig` dataclass.
+**Data flow**: Browser settings → localStorage → request interceptor → `X-LLM-*` headers → `get_llm_config()` dependency → endpoint logic. The `/llm-chat` endpoint proxies to the configured LLM backend with OpenAPI schema context as system prompt.
 
-2. **Browser side** (`static/`, `templates/`): The HTML template loads two Swagger UI plugins:
-   - `llm-settings-plugin.js` — a Redux-based plugin that renders the collapsible settings panel, persists settings to `localStorage`, and handles connection testing against `/models`.
-   - `llm-layout-plugin.js` — a layout plugin that places `LLMSettingsPanel` above the standard Swagger UI content.
-   - The `requestInterceptor` in `swagger_ui.html` reads from `localStorage` and injects the `X-LLM-*` headers into every "Try it out" call.
+## Build System
 
-### Key files
+- Hatchling (PEP 517). Static files and templates are force-included in wheel via `pyproject.toml`.
+- Tests use pytest with `asyncio_mode = "auto"` and anyio for async support.
 
-| File | Purpose |
-|------|---------|
-| `src/swagger_llm_ui/plugin.py` | `setup_llm_docs()` and `get_swagger_ui_html()` |
-| `src/swagger_llm_ui/dependencies.py` | `LLMConfig` dataclass and `get_llm_config()` FastAPI dependency |
-| `src/swagger_llm_ui/templates/swagger_ui.html` | Jinja2 template; wires up SwaggerUIBundle with both plugins and the `requestInterceptor` |
-| `src/swagger_llm_ui/static/llm-settings-plugin.js` | Swagger UI plugin: Redux state, React component for the settings form |
-| `src/swagger_llm_ui/static/llm-layout-plugin.js` | Swagger UI layout plugin: places the panel above the main UI |
-| `examples/demo_server.py` | Working FastAPI app demonstrating both `setup_llm_docs` and `get_llm_config` |
+## Key Conventions
 
-### Header mapping
-
-The browser injects these headers; the Python dependency reads them:
-
-| `LLMConfig` field | Header |
-|---|---|
-| `base_url` | `X-LLM-Base-Url` |
-| `api_key` | `X-LLM-Api-Key` |
-| `model_id` | `X-LLM-Model-Id` |
-| `max_tokens` | `X-LLM-Max-Tokens` |
-| `temperature` | `X-LLM-Temperature` |
-
-### Static file packaging
-
-`pyproject.toml` uses `hatchling` with `force-include` to bundle the `static/` and `templates/` directories into the wheel. If you add new static files, they are included automatically; new subdirectories must be added to `[tool.hatch.build.targets.wheel.force-include]`.
-
-### Testing notes
-
-Tests use `pytest-anyio` with `asyncio_mode = "auto"` (configured in `pyproject.toml`). Async tests for `get_llm_config` are decorated with `@pytest.mark.anyio`. The test file adds `src/` to `sys.path` directly, so the package does not need to be installed to run tests.
+- LLM header names follow the pattern `X-LLM-{Field}` (e.g., `X-LLM-Base-Url`, `X-LLM-Api-Key`).
+- Provider presets (OpenAI, Anthropic, Ollama, LM Studio, vLLM, Azure, Custom) are defined in the HTML template and JS plugin.
+- The JS plugins use Swagger UI's plugin system (`statePlugins`, `components`, `wrapComponents`). They are plain JS (no build step, no JSX).

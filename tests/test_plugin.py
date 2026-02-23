@@ -426,31 +426,97 @@ def test_concurrent_app_setup():
     """Test that setting up multiple apps concurrently doesn't cause issues."""
     import threading
     import time
-    
+
     results = []
-    
+
     def setup_app(idx):
         try:
             app = FastAPI(title=f"Test App {idx}")
             setup_llm_docs(app)
             client = TestClient(app)
-            
+
             # Verify docs work
             docs_resp = client.get("/docs")
-            
+
             results.append({"idx": idx, "success": docs_resp.status_code == 200})
         except Exception as e:
             results.append({"idx": idx, "success": False, "error": str(e)})
-    
+
     # Setup multiple apps concurrently
     threads = []
     for i in range(5):
         t = threading.Thread(target=setup_app, args=(i,))
         threads.append(t)
         t.start()
-    
+
     for t in threads:
         t.join()
-    
+
     # All should succeed
     assert all(r["success"] for r in results)
+
+
+# ── /llm-chat endpoint tests ────────────────────────────────────────────────
+
+
+def test_llm_chat_route_exists():
+    """The /llm-chat route should be reachable and return SSE stream."""
+    client = TestClient(make_app())
+    response = client.post(
+        "/llm-chat",
+        json={"messages": [{"role": "user", "content": "hello"}], "openapi_summary": ""},
+        headers={"X-LLM-Base-Url": "http://localhost:9999/v1"},
+    )
+    # Streaming endpoint returns 200 with SSE error event (no real backend)
+    assert response.status_code == 200
+    assert "text/event-stream" in response.headers["content-type"]
+    # The body should contain an SSE data line with an error
+    assert "data: " in response.text
+    assert "error" in response.text.lower() or "Request failed" in response.text
+
+
+def test_llm_chat_accepts_openapi_summary():
+    """The /llm-chat endpoint should accept an openapi_summary field."""
+    client = TestClient(make_app())
+    response = client.post(
+        "/llm-chat",
+        json={
+            "messages": [{"role": "user", "content": "What endpoints are available?"}],
+            "openapi_summary": "## API: Test v1\n\n## Endpoints\n- GET /health",
+        },
+        headers={"X-LLM-Base-Url": "http://localhost:9999/v1"},
+    )
+    # Streaming endpoint returns 200 with SSE content
+    assert response.status_code == 200
+    assert "text/event-stream" in response.headers["content-type"]
+
+
+def test_llm_chat_empty_messages_rejected():
+    """The /llm-chat endpoint should reject requests without required fields."""
+    client = TestClient(make_app())
+    response = client.post("/llm-chat", json={})
+    assert response.status_code == 422  # Validation error
+
+
+def test_llm_chat_uses_llm_headers():
+    """The /llm-chat endpoint should read LLM config from X-LLM-* headers."""
+    client = TestClient(make_app())
+    response = client.post(
+        "/llm-chat",
+        json={"messages": [{"role": "user", "content": "hi"}]},
+        headers={
+            "X-LLM-Base-Url": "http://localhost:9999/v1",
+            "X-LLM-Api-Key": "test-key",
+            "X-LLM-Model-Id": "test-model",
+        },
+    )
+    # Streaming endpoint returns 200 with error SSE event containing the URL
+    assert response.status_code == 200
+    assert "localhost:9999" in response.text
+
+
+def test_llm_chat_not_in_openapi_schema():
+    """The /llm-chat endpoint should not appear in the OpenAPI schema."""
+    client = TestClient(make_app())
+    schema = client.get("/openapi.json").json()
+    assert "/llm-chat" not in schema.get("paths", {})

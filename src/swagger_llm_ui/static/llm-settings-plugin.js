@@ -94,6 +94,14 @@
     };
   }
 
+  // ── Helper to dispatch via Swagger UI's auto-generated action dispatchers ──
+  function dispatchAction(system, actionName, value) {
+    var sys = system && typeof system.getSystem === 'function' ? system.getSystem() : null;
+    if (sys && sys.llmSettingsActions && typeof sys.llmSettingsActions[actionName] === 'function') {
+      sys.llmSettingsActions[actionName](value);
+    }
+  }
+
   // ── Reducer ─────────────────────────────────────────────────────────────────
   function llmSettingsReducer(state, action) {
     if (state === undefined) state = DEFAULT_STATE;
@@ -136,8 +144,14 @@
       case SET_SETTINGS_OPEN:
         return Object.assign({}, state, { settingsOpen: action.payload });
       case ADD_CHAT_MESSAGE:
-        var newHistory = state.chatHistory
-          ? [...state.chatHistory, action.payload]
+        // state may be an Immutable Map (Swagger UI wraps reducer state)
+        var existingHistory = state.get ? state.get("chatHistory") : state.chatHistory;
+        // Convert Immutable List to plain array if needed
+        if (existingHistory && typeof existingHistory.toJS === 'function') {
+          existingHistory = existingHistory.toJS();
+        }
+        var newHistory = Array.isArray(existingHistory)
+          ? existingHistory.concat([action.payload])
           : [action.payload];
         saveChatHistory(newHistory);
         return Object.assign({}, state, { chatHistory: newHistory });
@@ -200,6 +214,65 @@
     );
   }
 
+  // ── OpenAPI schema summary for chat context ────────────────────────────────
+  function getSchemaSummary(schema) {
+    if (!schema || typeof schema !== 'object') return '';
+
+    var lines = [];
+    var info = schema.info || {};
+    lines.push('## API: ' + (info.title || 'Untitled') + ' v' + (info.version || '?'));
+    if (info.description) {
+      lines.push(info.description.substring(0, 500));
+    }
+    lines.push('');
+    lines.push('## Endpoints');
+
+    if (schema.paths) {
+      Object.keys(schema.paths).forEach(function (path) {
+        var methods = schema.paths[path];
+        if (typeof methods !== 'object') return;
+
+        Object.keys(methods).forEach(function (method) {
+          if (method === 'parameters') return; // skip path-level params
+          var spec = methods[method];
+          if (typeof spec !== 'object') return;
+
+          var line = '- ' + method.toUpperCase() + ' ' + path;
+          if (spec.summary) line += ' — ' + spec.summary;
+          lines.push(line);
+
+          // Parameters
+          var params = spec.parameters || [];
+          if (params.length > 0) {
+            var paramDescs = params.map(function (p) {
+              return p.name + ' (' + (p.in || '?') + ', ' + (p.required ? 'required' : 'optional') + ')';
+            });
+            lines.push('  - Params: ' + paramDescs.join(', '));
+          } else {
+            lines.push('  - No parameters');
+          }
+
+          // Request body
+          if (spec.requestBody && spec.requestBody.content) {
+            var contentTypes = Object.keys(spec.requestBody.content);
+            if (contentTypes.length > 0) {
+              var bodySchema = spec.requestBody.content[contentTypes[0]].schema;
+              if (bodySchema && bodySchema.properties) {
+                var props = Object.keys(bodySchema.properties).map(function (k) {
+                  var p = bodySchema.properties[k];
+                  return k + ': ' + (p.type || 'any');
+                });
+                lines.push('  - Body: { ' + props.join(', ') + ' }');
+              }
+            }
+          }
+        });
+      });
+    }
+
+    return lines.join('\n');
+  }
+
   // ── Chat panel component ───────────────────────────────────────────────────
   function ChatPanelFactory(system) {
     var React = system.React;
@@ -207,21 +280,46 @@
     return class ChatPanel extends React.Component {
       constructor(props) {
         super(props);
-        this.state = { input: "", isTyping: false };
+        this.state = {
+          input: "",
+          isTyping: false,
+          streamingContent: null,
+          streamingTimestamp: null,
+          chatHistory: loadChatHistory(),
+          schemaSummary: null,
+          schemaLoading: false,
+        };
         this.handleSend = this.handleSend.bind(this);
         this.handleInputChange = this.handleInputChange.bind(this);
         this.handleKeyDown = this.handleKeyDown.bind(this);
         this.clearHistory = this.clearHistory.bind(this);
       }
 
-      getStore() {
-        // Safely get the Redux store from Swagger UI system
-        try {
-          var sys = system && typeof system.getSystem === 'function' ? system.getSystem() : null;
-          return sys && sys.store ? sys.store : null;
-        } catch (e) {
-          return null;
-        }
+      componentDidMount() {
+        this.fetchOpenApiSchema();
+      }
+
+      fetchOpenApiSchema() {
+        var self = this;
+        self.setState({ schemaLoading: true });
+        fetch("/openapi.json")
+          .then(function (res) { return res.json(); })
+          .then(function (schema) {
+            var summary = getSchemaSummary(schema);
+            self.setState({ schemaSummary: summary, schemaLoading: false });
+            dispatchAction(system, 'setOpenApiSchema', schema);
+          })
+          .catch(function () {
+            self.setState({ schemaSummary: '', schemaLoading: false });
+          });
+      }
+
+      addMessage(msg) {
+        this.setState(function (prev) {
+          var updated = prev.chatHistory.concat([msg]);
+          saveChatHistory(updated);
+          return { chatHistory: updated };
+        });
       }
 
       handleInputChange(e) {
@@ -236,52 +334,112 @@
       }
 
       handleSend() {
-        if (!this.state.input.trim()) return;
+        if (!this.state.input.trim() || this.state.isTyping) return;
 
+        var self = this;
         var userInput = this.state.input.trim();
-        this.setState({ input: "", isTyping: true });
+        var streamTs = Date.now() + 1;
 
-        // Add user message
-        var settings = this.props.getSettings();
-        if (settings && settings.apiKey) {
-          // Simulate sending to LLM for now
-          // In future, this would actually call the configured LLM API
-          setTimeout(function () {
-            var response = "I can help you with API documentation, generate curl commands, or write test code based on your OpenAPI spec.";
-            var store = self.getStore();
-            if (store) {
-              var ui = store.getState();
-              var chatHistory = selectors.getChatHistory(ui);
+        // Add user message to local state immediately
+        var userMsg = { role: 'user', content: userInput, timestamp: Date.now() };
+        self.addMessage(userMsg);
+        self.setState({ input: "", isTyping: true, streamingContent: "", streamingTimestamp: streamTs });
 
-              // Simplified response - in a real implementation, this would call the API
-              store.dispatch(actions.addChatMessage({
-                role: 'user',
-                content: userInput,
-                timestamp: Date.now()
-              }));
-              store.dispatch(actions.addChatMessage({
-                role: 'assistant',
-                content: response,
-                timestamp: Date.now()
-              }));
-            }
+        // Build API messages from local state (includes the user message we just added)
+        var apiMessages = self.state.chatHistory.concat([userMsg]).map(function (m) {
+          return { role: m.role, content: m.content };
+        });
 
-            // Scroll to bottom
-            var chatContainer = document.getElementById('llm-chat-messages');
-            if (chatContainer) {
-              chatContainer.scrollTop = chatContainer.scrollHeight;
-            }
-          }, 500);
+        var settings = loadFromStorage();
+
+        function scrollToBottom() {
+          var el = document.getElementById('llm-chat-messages');
+          if (el) el.scrollTop = el.scrollHeight;
         }
 
-        this.setState({ isTyping: false });
+        function finalize(content) {
+          self.addMessage({ role: 'assistant', content: content, timestamp: streamTs });
+          self.setState({ isTyping: false, streamingContent: null, streamingTimestamp: null });
+          setTimeout(scrollToBottom, 30);
+        }
+
+        fetch("/llm-chat", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-LLM-Base-Url": settings.baseUrl || "",
+            "X-LLM-Api-Key": settings.apiKey || "",
+            "X-LLM-Model-Id": settings.modelId || "",
+            "X-LLM-Max-Tokens": settings.maxTokens != null ? String(settings.maxTokens) : "",
+            "X-LLM-Temperature": settings.temperature != null ? String(settings.temperature) : "",
+          },
+          body: JSON.stringify({
+            messages: apiMessages,
+            openapi_summary: self.state.schemaSummary || ""
+          })
+        })
+          .then(function (res) {
+            if (!res.ok) {
+              throw new Error("HTTP " + res.status + ": " + res.statusText);
+            }
+            var reader = res.body.getReader();
+            var decoder = new TextDecoder();
+            var accumulated = "";
+            var buffer = "";
+
+            function processChunk() {
+              return reader.read().then(function (result) {
+                if (result.done) {
+                  finalize(accumulated || "Sorry, I couldn't get a response.");
+                  return;
+                }
+
+                buffer += decoder.decode(result.value, { stream: true });
+                var lines = buffer.split("\n");
+                buffer = lines.pop() || "";
+
+                for (var i = 0; i < lines.length; i++) {
+                  var line = lines[i].trim();
+                  if (!line || !line.startsWith("data: ")) continue;
+                  var payload = line.substring(6);
+
+                  if (payload === "[DONE]") {
+                    finalize(accumulated || "Sorry, I couldn't get a response.");
+                    return;
+                  }
+
+                  try {
+                    var chunk = JSON.parse(payload);
+                    if (chunk.error) {
+                      finalize("Error: " + chunk.error + (chunk.details ? ": " + chunk.details : ""));
+                      return;
+                    }
+                    if (chunk.choices && chunk.choices[0] && chunk.choices[0].delta && chunk.choices[0].delta.content) {
+                      accumulated += chunk.choices[0].delta.content;
+                      self.setState({ streamingContent: accumulated });
+                      scrollToBottom();
+                    }
+                  } catch (e) {
+                    // skip unparseable chunks
+                  }
+                }
+
+                return processChunk();
+              });
+            }
+
+            return processChunk();
+          })
+          .catch(function (err) {
+            finalize("Error: " + (err.message || "Request failed"));
+          });
+
+        setTimeout(scrollToBottom, 50);
       }
 
       clearHistory() {
-        var store = this.getStore();
-        if (store) {
-          store.dispatch(actions.clearChatHistory());
-        }
+        saveChatHistory([]);
+        this.setState({ chatHistory: [] });
       }
 
       renderMessage(msg) {
@@ -293,7 +451,7 @@
           React.createElement(
             "div",
             { className: "llm-chat-message-header" },
-            isUser ? "👤 You" : "🤖 Assistant",
+            isUser ? "You" : "Assistant",
             React.createElement(
               "span",
               { className: "llm-chat-message-time" },
@@ -309,13 +467,13 @@
       }
 
       formatMessageContent(content) {
-        // Simple markdown-like formatting
+        var React = system.React;
         var lines = content.split('\n');
         return React.createElement(
           "div",
           null,
           lines.map(function (line, idx) {
-            if (line.startsWith('```')) return null; // Skip code block markers for now
+            if (line.startsWith('```')) return null;
             return React.createElement("p", { key: idx, style: { margin: '4px 0' } }, line);
           })
         );
@@ -323,7 +481,8 @@
 
       render() {
         var React = system.React;
-        var chatHistory = this.props.getChatHistory();
+        var self = this;
+        var chatHistory = this.state.chatHistory || [];
 
         return React.createElement(
           "div",
@@ -331,14 +490,30 @@
           React.createElement(
             "div",
             { id: "llm-chat-messages", style: styles.chatMessages },
-            chatHistory.length === 0
+            chatHistory.length === 0 && !this.state.streamingContent
               ? React.createElement(
                   "div",
                   { style: styles.emptyChat },
-                  "Start a conversation about your API!\n\nAsk me to:\n• Generate curl commands\n• Explain endpoint parameters\n• Write test code\n• Create example requests"
+                  "Ask questions about your API!\n\nExamples:\n\u2022 What endpoints are available?\n\u2022 How do I use the chat completions endpoint?\n\u2022 Generate a curl command for /health"
                 )
-              : chatHistory.map(this.renderMessage.bind(this))
+              : [].concat(
+                  chatHistory.map(this.renderMessage.bind(this)),
+                  this.state.streamingContent != null
+                    ? [this.renderMessage({
+                        role: 'assistant',
+                        content: this.state.streamingContent || "...",
+                        timestamp: this.state.streamingTimestamp || 0
+                      })]
+                    : []
+                )
             ),
+          this.state.isTyping && !this.state.streamingContent
+            ? React.createElement(
+                "div",
+                { style: { padding: "8px 12px", color: "#9ca3af", fontSize: "12px", fontStyle: "italic" } },
+                "Thinking..."
+              )
+            : null,
           React.createElement(
             "div",
             { style: styles.chatInputArea },
@@ -367,10 +542,9 @@
                 {
                   onClick: this.handleSend,
                   disabled: !this.state.input.trim() || this.state.isTyping,
-                  style: {
-                    ...styles.sendButton,
+                  style: Object.assign({}, styles.sendButton, {
                     opacity: (!this.state.input.trim() || this.state.isTyping) ? 0.5 : 1
-                  }
+                  })
                 },
                 this.state.isTyping ? "..." : "Send"
               )
@@ -405,16 +579,6 @@
         this.handleConnectionTest = debounce(this.handleConnectionTest.bind(this), 500);
       }
 
-      getStore() {
-        // Safely get the Redux store from Swagger UI system
-        try {
-          var sys = system && typeof system.getSystem === 'function' ? system.getSystem() : null;
-          return sys && sys.store ? sys.store : null;
-        } catch (e) {
-          return null;
-        }
-      }
-
       handleSaveAndTest() {
         var self = this;
         var settings = {
@@ -427,18 +591,18 @@
         };
         saveToStorage(settings);
         self.setState({ connectionStatus: "connecting", lastError: "" });
-        var store = this.getStore();
-        if (store) {
-          store.dispatch(actions.setConnectionStatus("connecting"));
-        }
+        dispatchAction(system, 'setConnectionStatus', "connecting");
 
-        var url = settings.baseUrl.replace(/\/$/, "") + "/models";
-        var headers = { "Content-Type": "application/json" };
-        if (settings.apiKey) {
-          headers["Authorization"] = "Bearer " + settings.apiKey;
-        }
-
-        fetch(url, { method: 'GET', headers: headers })
+        // Route through backend proxy to avoid CORS
+        fetch("/models", {
+          method: 'GET',
+          headers: {
+            "Content-Type": "application/json",
+            "X-LLM-Base-Url": settings.baseUrl || "",
+            "X-LLM-Api-Key": settings.apiKey || "",
+            "X-LLM-Model-Id": settings.modelId || "",
+          }
+        })
           .then(function (res) {
             if (!res.ok) {
               throw new Error('HTTP ' + res.status + ': ' + res.statusText);
@@ -446,83 +610,56 @@
             return res.json();
           })
           .then(function (data) {
-            var status = data.models ? "connected" : "connected";
-            self.setState({ connectionStatus: status });
-            var store = self.getStore();
-            if (store) {
-              store.dispatch(actions.setConnectionStatus(status));
-            }
+            self.setState({ connectionStatus: "connected" });
+            dispatchAction(system, 'setConnectionStatus', "connected");
           })
           .catch(function (err) {
             var errorMsg = err.message || "Connection failed";
             self.setState({ connectionStatus: "error", lastError: errorMsg });
-            var store = self.getStore();
-            if (store) {
-              store.dispatch(actions.setConnectionStatus("error"));
-            }
+            dispatchAction(system, 'setConnectionStatus', "error");
           });
       }
 
       handleConnectionTest() {
-        // Trigger a test without saving
         this.handleSaveAndTest();
       }
 
       toggleOpen() {
         var newValue = !this.state.settingsOpen;
         this.setState({ settingsOpen: newValue });
-        var store = this.getStore();
-        if (store) {
-          store.dispatch(actions.setSettingsOpen(newValue));
-        }
+        dispatchAction(system, 'setSettingsOpen', newValue);
       }
 
       handleProviderChange(e) {
-        this.setState({ provider: e.target.value });
-        var store = this.getStore();
-        if (store) {
-          store.dispatch(actions.setProvider(e.target.value));
-        }
+        var value = e.target.value;
+        var provider = LLM_PROVIDERS[value] || LLM_PROVIDERS.custom;
+        this.setState({ provider: value, baseUrl: provider.url });
+        dispatchAction(system, 'setProvider', value);
       }
 
       handleBaseUrlChange(e) {
         this.setState({ baseUrl: e.target.value });
-        var store = this.getStore();
-        if (store) {
-          store.dispatch(actions.setBaseUrl(e.target.value));
-        }
+        dispatchAction(system, 'setBaseUrl', e.target.value);
       }
 
       handleApiKeyChange(e) {
         this.setState({ apiKey: e.target.value });
-        var store = this.getStore();
-        if (store) {
-          store.dispatch(actions.setApiKey(e.target.value));
-        }
+        dispatchAction(system, 'setApiKey', e.target.value);
       }
 
       handleModelIdChange(e) {
         this.setState({ modelId: e.target.value });
-        var store = this.getStore();
-        if (store) {
-          store.dispatch(actions.setModelId(e.target.value));
-        }
+        dispatchAction(system, 'setModelId', e.target.value);
       }
 
       handleMaxTokensChange(e) {
         this.setState({ maxTokens: e.target.value });
-        var store = this.getStore();
-        if (store) {
-          store.dispatch(actions.setMaxTokens(e.target.value));
-        }
+        dispatchAction(system, 'setMaxTokens', e.target.value);
       }
 
       handleTemperatureChange(e) {
         this.setState({ temperature: e.target.value });
-        var store = this.getStore();
-        if (store) {
-          store.dispatch(actions.setTemperature(e.target.value));
-        }
+        dispatchAction(system, 'setTemperature', e.target.value);
       }
 
       render() {
@@ -549,11 +686,11 @@
         var fieldStyle = { marginBottom: "12px" };
 
         // Provider preset dropdown
-        var providerOptions = Object.entries(LLM_PROVIDERS).map(function ([key, config]) {
+        var providerOptions = Object.keys(LLM_PROVIDERS).map(function (key) {
           return React.createElement(
             "option",
             { key: key, value: key },
-            config.name
+            LLM_PROVIDERS[key].name
           );
         });
 
@@ -573,15 +710,14 @@
           )
         );
 
-        // Provider badge (read-only indicator next to header)
-        var provider = LLM_PROVIDERS[s.provider] || LLM_PROVIDERS.custom;
+        // Provider badge
         var providerBadge = React.createElement(
           "span",
           { className: "llm-provider-badge llm-provider-" + (s.provider === 'custom' ? 'openai' : s.provider), style: { fontSize: "10px", padding: "2px 8px", background: "#374151", borderRadius: "10px", color: "#9ca3af", marginLeft: "8px" } },
           provider.name
         );
 
-        // Base URL field (auto-updates when preset changes)
+        // Base URL field
         var baseUrlField = React.createElement(
           "div",
           { style: fieldStyle },
@@ -592,7 +728,7 @@
             React.createElement("input", {
               type: "text",
               value: s.baseUrl,
-              style: { ...inputStyle, flex: 1 },
+              style: Object.assign({}, inputStyle, { flex: 1 }),
               onChange: this.handleBaseUrlChange.bind(this),
             }),
             provider.name !== 'Custom' && React.createElement(
@@ -615,7 +751,7 @@
             React.createElement("input", {
               type: "password",
               value: s.apiKey,
-              placeholder: "sk-…",
+              placeholder: "sk-...",
               style: inputStyle,
               onChange: this.handleApiKeyChange.bind(this),
             })
@@ -913,6 +1049,7 @@
       color: "#9ca3af",
       padding: "40px 20px",
       fontSize: "13px",
+      whiteSpace: "pre-line",
     },
   };
 

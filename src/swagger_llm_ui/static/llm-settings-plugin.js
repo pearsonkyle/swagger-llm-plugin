@@ -15,6 +15,58 @@
     custom: { name: 'Custom', url: '' }
   };
 
+  // ── Markdown parser initialization (marked.js) ────────────────────────────
+  var marked = null;
+  function initMarked() {
+    if (marked) return marked;
+    
+    // Load marked.js from CDN if not already loaded
+    if (typeof window.marked !== 'undefined') {
+      marked = window.marked;
+      return marked;
+    }
+    
+    // Create script element to load marked.js
+    var script = document.createElement('script');
+    script.src = 'https://cdn.jsdelivr.net/npm/marked@9/marked.min.js';
+    script.async = true;
+    document.head.appendChild(script);
+    
+    // Wait for marked to load
+    var promise = new Promise(function(resolve) {
+      var checkLoaded = function() {
+        if (window.marked) {
+          marked = window.marked;
+          resolve(marked);
+        } else {
+          setTimeout(checkLoaded, 100);
+        }
+      };
+      checkLoaded();
+    });
+    
+    return promise;
+  }
+
+  // ── Parse Markdown safely ─────────────────────────────────────────────────
+  function parseMarkdown(text) {
+    if (!text || typeof text !== 'string') return '';
+    
+    // Sanitize by stripping any raw <script> tags
+    var sanitized = text.replace(/<script[^>]*>.*?<\/script>/gi, '');
+    
+    try {
+      if (marked) {
+        return marked.parse(sanitized);
+      }
+    } catch (e) {
+      console.error('Markdown parsing error:', e);
+    }
+    
+    // Fallback: simple line break conversion
+    return sanitized.replace(/\n/g, '<br>');
+  }
+
   // ── Action types ────────────────────────────────────────────────────────────
   var SET_BASE_URL = "LLM_SET_BASE_URL";
   var SET_API_KEY = "LLM_SET_API_KEY";
@@ -288,11 +340,20 @@
           chatHistory: loadChatHistory(),
           schemaSummary: null,
           schemaLoading: false,
+          copiedMessageId: null,
+          headerHover: {},
         };
         this.handleSend = this.handleSend.bind(this);
         this.handleInputChange = this.handleInputChange.bind(this);
         this.handleKeyDown = this.handleKeyDown.bind(this);
         this.clearHistory = this.clearHistory.bind(this);
+        this.copyToClipboard = this.copyToClipboard.bind(this);
+        this.renderTypingIndicator = this.renderTypingIndicator.bind(this);
+        this.formatMessageContent = this.formatMessageContent.bind(this);
+        this.setHeaderHover = this.setHeaderHover.bind(this);
+        
+        // Initialize marked.js
+        initMarked();
       }
 
       componentDidMount() {
@@ -437,6 +498,42 @@
         setTimeout(scrollToBottom, 50);
       }
 
+      setHeaderHover(timestamp, show) {
+        var newHover = Object.assign({}, this.state.headerHover);
+        if (show) {
+          newHover[timestamp] = true;
+        } else {
+          delete newHover[timestamp];
+        }
+        this.setState({ headerHover: newHover });
+      }
+
+      copyToClipboard(text) {
+        if (!text || !navigator.clipboard) return;
+        
+        navigator.clipboard.writeText(text).then(function () {
+          var self = this;
+          self.setState({ copiedMessageId: Date.now() });
+          setTimeout(function () {
+            self.setState({ copiedMessageId: null });
+          }, 2000);
+        }.bind(this)).catch(function (err) {
+          console.error('Failed to copy:', err);
+        });
+      }
+
+      renderTypingIndicator() {
+        var React = system.React;
+        return React.createElement(
+          "div",
+          { className: "llm-typing-indicator" },
+          React.createElement("span", null, "Assistant is typing"),
+          React.createElement("span", { className: "llm-typing-dot", style: { animationDelay: '-0.32s' } }),
+          React.createElement("span", { className: "llm-typing-dot", style: { animationDelay: '-0.16s' } }),
+          React.createElement("span", { className: "llm-typing-dot" })
+        );
+      }
+
       clearHistory() {
         saveChatHistory([]);
         this.setState({ chatHistory: [] });
@@ -444,39 +541,75 @@
 
       renderMessage(msg) {
         var React = system.React;
+        var self = this;
         var isUser = msg.role === 'user';
+        
         return React.createElement(
           "div",
-          { key: msg.timestamp, className: "llm-chat-message " + (isUser ? 'user' : 'assistant') },
+          { key: msg.timestamp, className: "llm-chat-message-wrapper" },
           React.createElement(
             "div",
-            { className: "llm-chat-message-header" },
-            isUser ? "You" : "Assistant",
+            { 
+              className: "llm-chat-message " + (isUser ? 'user' : 'assistant'),
+              style: { maxWidth: isUser ? "85%" : "90%" }
+            },
+            !isUser && React.createElement("div", { 
+              className: "llm-avatar assistant-avatar",
+              title: "AI Assistant"
+            }, "🤖"),
             React.createElement(
-              "span",
-              { className: "llm-chat-message-time" },
-              new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+              "div",
+              { 
+                className: "llm-chat-message-header",
+                onMouseEnter: function() { self.setHeaderHover(true); },
+                onMouseLeave: function() { self.setHeaderHover(false); }
+              },
+              isUser 
+                ? React.createElement("span", { className: "llm-user-label" }, "You")
+                : React.createElement("div", { style: { display: "flex", alignItems: "center", gap: "6px" } },
+                    React.createElement("span", { className: "llm-assistant-label" }, "Assistant"),
+                    React.createElement("span", { className: "llm-chat-message-time" },
+                      new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                    )
+                  ),
+              React.createElement(
+                "button",
+                {
+                  className: "llm-copy-btn",
+                  onClick: function() { self.copyToClipboard(msg.content); },
+                  title: "Copy message",
+                  style: Object.assign({}, styles.copyMessageBtn, {
+                    opacity: self.state.headerHover[msg.timestamp] || self.state.copiedMessageId === msg.timestamp ? 1 : 0
+                  })
+                },
+                self.state.copiedMessageId === msg.timestamp ? "✅" : "📋"
+              )
+            ),
+            React.createElement(
+              "div",
+              { className: "llm-chat-message-content" },
+              this.formatMessageContent(msg.content)
             )
-          ),
-          React.createElement(
-            "div",
-            { className: "llm-chat-message-content" },
-            this.formatMessageContent(msg.content)
           )
         );
       }
 
       formatMessageContent(content) {
         var React = system.React;
-        var lines = content.split('\n');
-        return React.createElement(
-          "div",
-          null,
-          lines.map(function (line, idx) {
-            if (line.startsWith('```')) return null;
-            return React.createElement("p", { key: idx, style: { margin: '4px 0' } }, line);
-          })
-        );
+        
+        // If content is empty, return null
+        if (!content || !content.trim()) {
+          return React.createElement("span", { style: { opacity: 0.5 } }, "(no content)");
+        }
+        
+        // Parse Markdown
+        var html = parseMarkdown(content);
+        
+        return React.createElement("div", {
+          className: "llm-chat-message-text",
+          style: styles.chatMessageContent,
+          dangerouslySetInnerHTML: { __html: html }
+        });
       }
 
       render() {
@@ -510,8 +643,8 @@
           this.state.isTyping && !this.state.streamingContent
             ? React.createElement(
                 "div",
-                { style: { padding: "8px 12px", color: "#9ca3af", fontSize: "12px", fontStyle: "italic" } },
-                "Thinking..."
+                { style: { padding: "8px 12px", color: "#9ca3af", fontSize: "12px" } },
+                this.renderTypingIndicator()
               )
             : null,
           React.createElement(
@@ -969,7 +1102,9 @@
     chatContainer: {
       display: "flex",
       flexDirection: "column",
-      height: "400px",
+      minHeight: "400px",
+      maxHeight: "65vh",
+      height: "calc(100vh - 200px)",
     },
     chatMessages: {
       flex: 1,
@@ -977,14 +1112,15 @@
       padding: "12px",
       display: "flex",
       flexDirection: "column",
-      gap: "8px",
+      gap: "12px",
+      scrollBehavior: "smooth",
     },
     chatMessage: {
       display: "flex",
       flexDirection: "column",
-      padding: "8px",
-      borderRadius: "8px",
-      maxWidth: "90%",
+      padding: "10px 14px",
+      borderRadius: "12px",
+      maxWidth: "85%",
     },
     chatMessageUser: {
       alignSelf: "flex-end",
@@ -998,12 +1134,26 @@
     },
     chatMessageHeader: {
       fontSize: "10px",
-      marginBottom: "4px",
-      opacity: 0.7,
+      marginBottom: "6px",
+      opacity: 0.8,
     },
     chatMessageContent: {
       fontSize: "13px",
-      lineHeight: "1.5",
+      lineHeight: "1.6",
+    },
+    copyMessageBtn: {
+      background: "transparent",
+      border: "none",
+      color: "#9ca3af",
+      fontSize: "14px",
+      cursor: "pointer",
+      padding: "2px 6px",
+      borderRadius: "4px",
+      opacity: 0,
+      transition: "opacity 0.2s ease, color 0.2s ease",
+    },
+    chatMessageWrapperHover: {
+      display: "contents",
     },
     chatInputArea: {
       borderTop: "1px solid #374151",
@@ -1051,7 +1201,147 @@
       fontSize: "13px",
       whiteSpace: "pre-line",
     },
+    codeBlock: {
+      background: "#1f2937",
+      borderRadius: "6px",
+      padding: "12px",
+      overflowX: "auto",
+      margin: "8px 0",
+      fontSize: "12px",
+      fontFamily: "'Consolas', 'Monaco', monospace",
+    },
+    codeBlockHeader: {
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginBottom: "8px",
+      color: "#9ca3af",
+      fontSize: "11px",
+    },
+    codeCopyBtn: {
+      background: "#374151",
+      border: "none",
+      color: "#e5e7eb",
+      padding: "4px 8px",
+      borderRadius: "4px",
+      cursor: "pointer",
+      fontSize: "10px",
+    },
+    codeCopySuccess: {
+      background: "#10b981",
+      color: "#fff",
+    },
+    typingIndicator: {
+      display: "inline-flex",
+      alignItems: "center",
+      gap: "4px",
+      padding: "8px 12px",
+      background: "#374151",
+      borderRadius: "18px",
+      fontSize: "12px",
+    },
+    typingDot: {
+      width: "6px",
+      height: "6px",
+      borderRadius: "50%",
+      background: "#9ca3af",
+      animation: "typing 1.4s infinite ease-in-out both",
+    },
+    typingDot1: { animationDelay: "-0.32s" },
+    typingDot2: { animationDelay: "-0.16s" },
   };
+
+  // ── CSS styles for chat bubbles, avatars, and animations ───────────────────
+  var chatStyles = [
+    // Chat message wrapper styles
+    '.llm-chat-message-wrapper { display: flex; width: 100%; margin-bottom: 8px; }',
+    
+    // Message bubble styles
+    '.llm-chat-message { padding: 10px 14px; border-radius: 12px; max-width: 85%; position: relative; }',
+    '.llm-chat-message.user { align-self: flex-end; background: #2563eb; color: white; }',
+    '.llm-chat-message.assistant { align-self: flex-start; background: #374151; color: #e5e7eb; }',
+    
+    // Avatar styles
+    '.llm-avatar { width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 18px; margin-right: 8px; flex-shrink: 0; }',
+    '.assistant-avatar { background: linear-gradient(135deg, #6366f1, #8b5cf6); }',
+    '.llm-chat-message.assistant .llm-avatar { margin-right: 8px; }',
+    
+    // Message header (user/assistant label + time)
+    '.llm-chat-message-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; font-size: 11px; opacity: 0.9; }',
+    '.llm-user-label { font-weight: 600; color: #e5e7eb; }',
+    '.llm-assistant-label { font-weight: 600; color: #8b5cf6; }',
+    '.llm-chat-message-time { opacity: 0.7; font-size: 10px; }',
+    
+    // Copy button on messages
+    '.llm-copy-btn { background: transparent; border: none; color: #9ca3af; font-size: 14px; cursor: pointer; padding: 2px 6px; border-radius: 4px; transition: all 0.2s ease; margin-left: 8px; }',
+    '.llm-copy-btn:hover { background: #4b5563; color: white; transform: scale(1.1); }',
+    
+    // Chat input area
+    '.llm-chat-message-text { font-size: 13px; line-height: 1.6; word-wrap: break-word; }',
+    '.llm-chat-message-text p { margin: 8px 0; }',
+    '.llm-chat-message-text p:first-child { margin-top: 4px; }',
+    '.llm-chat-message-text p:last-child { margin-bottom: 4px; }',
+    
+    // Markdown content in messages
+    '.llm-chat-message-text strong { color: #e5e7eb; }',
+    '.llm-chat-message-text em { font-style: italic; color: #d1d5db; }',
+    '.llm-chat-message-text ul { margin: 8px 0; padding-left: 24px; }',
+    '.llm-chat-message-text ol { margin: 8px 0; padding-left: 24px; }',
+    '.llm-chat-message-text li { margin: 4px 0; }',
+    '.llm-chat-message-text blockquote { border-left: 3px solid #6b7280; margin: 8px 0; padding-left: 12px; opacity: 0.9; }',
+    '.llm-chat-message-text a { color: #60a5fa; text-decoration: none; }',
+    '.llm-chat-message-text a:hover { text-decoration: underline; }',
+    
+    // Code blocks in messages
+    '.llm-chat-message-text pre { background: #1f2937; border-radius: 8px; padding: 12px; overflow-x: auto; margin: 10px 0; font-family: "Consolas", "Monaco", monospace; font-size: 12px; position: relative; }',
+    '.llm-chat-message-text code { font-family: "Consolas", "Monaco", monospace; background: rgba(0,0,0,0.3); padding: 2px 6px; border-radius: 4px; font-size: 12px; }',
+    '.llm-chat-message-text pre code { background: transparent; padding: 0; }',
+    
+    // Code block header with copy button
+    '.code-block-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid #374151; }',
+    '.code-block-label { color: #9ca3af; font-size: 11px; font-weight: 600; }',
+    '.code-block-copy { background: #374151; border: none; color: #e5e7eb; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 10px; transition: all 0.2s; }',
+    '.code-block-copy:hover { background: #4b5563; color: white; }',
+    '.code-block-copy.copied { background: #10b981 !important; color: white; }',
+    
+    // Scrollbar styling
+    '#llm-chat-messages::-webkit-scrollbar { width: 8px; }',
+    '#llm-chat-messages::-webkit-scrollbar-track { background: #1f2937; border-radius: 4px; }',
+    '#llm-chat-messages::-webkit-scrollbar-thumb { background: #374151; border-radius: 4px; }',
+    '#llm-chat-messages::-webkit-scrollbar-thumb:hover { background: #4b5563; }',
+    
+    // Typing indicator animation
+    '@keyframes typing { 0%, 80%, 100% { transform: scale(0); } 40% { transform: scale(1); } }',
+    '.llm-typing-indicator { display: inline-flex; align-items: center; gap: 4px; padding: 8px 12px; background: #374151; border-radius: 18px; font-size: 12px; margin-bottom: 8px; }',
+    '.llm-typing-dot { width: 6px; height: 6px; border-radius: 50%; background: #9ca3af; animation: typing 1.4s infinite ease-in-out both; }',
+    '.llm-typing-dot:nth-child(1) { animation-delay: -0.32s; }',
+    '.llm-typing-dot:nth-child(2) { animation-delay: -0.16s; }',
+    
+    // Mobile responsive styles
+    '@media (max-width: 768px) {',
+    '  .llm-chat-message-wrapper { width: 100%; padding: 0 8px; }',
+    '  .llm-chat-message { max-width: 92%; padding: 10px 12px; }',
+    '  .llm-avatar { width: 28px; height: 28px; font-size: 16px; }',
+    '  .llm-chat-message-text { font-size: 14px; }',
+    '  .llm-typing-indicator { font-size: 13px; padding: 10px 14px; }',
+    '}',
+    
+    // Chat container responsive
+    '@media (max-width: 768px) {',
+    '  .llm-chat-container { height: calc(100vh - 160px) !important; max-height: none !important; }',
+    '  .llm-chat-messages { padding: 8px; gap: 10px; }',
+    '}',
+  ].join('\n');
+  
+  // Inject chat styles into document
+  if (typeof document !== 'undefined') {
+    var styleEl = document.createElement('style');
+    styleEl.id = 'swagger-llm-chat-styles';
+    styleEl.textContent = chatStyles;
+    if (!document.getElementById('swagger-llm-chat-styles')) {
+      document.head.appendChild(styleEl);
+    }
+  }
 
   // ── Plugin definition ───────────────────────────────────────────────────────
   window.LLMSettingsPlugin = function (system) {

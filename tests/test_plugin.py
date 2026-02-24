@@ -514,7 +514,7 @@ def test_llm_chat_not_in_openapi_schema():
 
 def test_build_openapi_context_from_full_schema():
     """Test that build_openapi_context converts full schema to readable format."""
-    from swagger_llm_ui.plugin import build_openapi_context
+    from swagger_llm.plugin import build_openapi_context
     
     schema = {
         "info": {"title": "Test API", "version": "1.0.0"},
@@ -572,7 +572,7 @@ def test_build_openapi_context_from_full_schema():
 
 def test_openapi_context_includes_servers():
     """Test that server URLs are included in OpenAPI context."""
-    from swagger_llm_ui.plugin import build_openapi_context
+    from swagger_llm.plugin import build_openapi_context
     
     schema = {
         "info": {"title": "Test API", "version": "1.0.0"},
@@ -591,7 +591,7 @@ def test_openapi_context_includes_servers():
 
 def test_openapi_context_handles_empty_schema():
     """Test that empty/invalid schemas don't cause errors."""
-    from swagger_llm_ui.plugin import build_openapi_context
+    from swagger_llm.plugin import build_openapi_context
     
     assert build_openapi_context(None) == ""
     assert build_openapi_context({}) == ""

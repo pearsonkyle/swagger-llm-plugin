@@ -44,11 +44,11 @@ Homepage = "https://github.com/pearsonkyle/swagger-llm"
 Repository = "https://github.com/pearsonkyle/swagger-llm"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/swagger_llm_ui"]
+packages = ["src/swagger_llm"]
 
 [tool.hatch.build.targets.wheel.force-include]
-"src/swagger_llm_ui/static" = "swagger_llm_ui/static"
-"src/swagger_llm_ui/templates" = "swagger_llm_ui/templates"
+"src/swagger_llm/static" = "swagger_llm/static"
+"src/swagger_llm/templates" = "swagger_llm/templates"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

@@ -550,8 +550,8 @@
       }
 
       handleCancel() {
-        if (this.state.cancelToken) {
-          this.state.cancelToken.abort();
+        if (this._currentCancelToken) {
+          this._currentCancelToken.abort();
         }
       }
 
@@ -562,6 +562,9 @@
         var userInput = this.state.input.trim();
         var msgId = generateMessageId(); // Use unique message ID instead of timestamp
         var streamMsgId = generateMessageId();
+
+        // Clear input and mark as typing before the async request
+        self.setState({ input: "", isTyping: true });
 
         // Build API messages from current history + new user message before setState
         var userMsg = { role: 'user', content: userInput, messageId: msgId };
@@ -725,16 +728,17 @@
         this.setState({ headerHover: newHover });
       }
 
-      copyToClipboard(text) {
+      copyToClipboard(text, messageId) {
         if (!text || !navigator.clipboard) return;
-        
+        var self = this;
         navigator.clipboard.writeText(text).then(function () {
-          if (this._copyTimeoutId) clearTimeout(this._copyTimeoutId);
-          this._copyTimeoutId = setTimeout(function () {
-            this._copyTimeoutId = null;
-            this.setState({ copiedMessageId: null });
-          }.bind(this), 2000);
-        }.bind(this)).catch(function (err) {
+          self.setState({ copiedMessageId: messageId });
+          if (self._copyTimeoutId) clearTimeout(self._copyTimeoutId);
+          self._copyTimeoutId = setTimeout(function () {
+            self._copyTimeoutId = null;
+            self.setState({ copiedMessageId: null });
+          }, 2000);
+        }).catch(function (err) {
           console.error('Failed to copy:', err);
         });
       }
@@ -800,7 +804,7 @@
                 "button",
                 {
                   className: "llm-copy-btn",
-                  onClick: function() { self.copyToClipboard(msg.content); },
+                  onClick: function() { self.copyToClipboard(msg.content, msg.messageId); },
                   title: "Copy message",
                   style: Object.assign({}, styles.copyMessageBtn, {
                     opacity: (self.state.headerHover[msg.messageId || msg.timestamp] || self.state.copiedMessageId === msg.messageId) && !isStreamingThisMessage ? 1 : 0

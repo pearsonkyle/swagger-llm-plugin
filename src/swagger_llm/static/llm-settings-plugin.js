@@ -465,6 +465,7 @@
         this._copyTimeoutId = null;
         
         this._fetchAbortController = null;
+        this._currentCancelToken = null;
       
         // Initialize marked.js
         initMarked();
@@ -550,8 +551,8 @@
       }
 
       handleCancel() {
-        if (this.state.cancelToken) {
-          this.state.cancelToken.abort();
+        if (this._currentCancelToken) {
+          this._currentCancelToken.abort();
         }
       }
 
@@ -882,7 +883,7 @@
             React.createElement(
               "div",
               { style: styles.chatControls },
-              // Clear button - separate from send/cancel group
+              // Clear history button (left side)
               React.createElement(
                 "button",
                 {
@@ -890,37 +891,36 @@
                   style: Object.assign({}, styles.chatButton, styles.chatButtonSecondary),
                   title: "Clear chat history"
                 },
-                "Clear"
+                "Clear History"
               ),
-              // Send/Cancel button group
+              // Send/Cancel button group (right side - mutually exclusive)
               React.createElement(
                 "div",
-                { style: { display: "flex", gap: "8px" } },
-                this.state.isTyping && React.createElement(
-                  "button",
-                  {
-                    onClick: function() { 
-                      if (self._currentCancelToken) self._currentCancelToken.abort(); 
-                    },
-                    style: Object.assign({}, styles.chatButton, styles.chatButtonDanger),
-                    title: "Cancel streaming response"
-                  },
-                "❌ Cancel"
-              ),
-              React.createElement(
-                "button",
-                {
-                  onClick: this.handleSend,
-                  disabled: !this.state.input.trim() || this.state.isTyping,
-                  style: Object.assign({}, styles.chatButton, styles.chatButtonPrimary, {
-                    opacity: (!this.state.input.trim() || this.state.isTyping) ? 0.6 : 1,
-                    cursor: (!this.state.input.trim() || this.state.isTyping) ? "not-allowed" : "pointer"
-                  })
-                },
-                this.state.isTyping ? "..." : "Send ✅"
+                { style: styles.buttonGroup },
+                this.state.isTyping
+                  ? React.createElement(
+                      "button",
+                      {
+                        onClick: this.handleCancel,
+                        style: Object.assign({}, styles.chatButton, styles.chatButtonDanger),
+                        title: "Cancel streaming response"
+                      },
+                      "Cancel"
+                    )
+                  : React.createElement(
+                      "button",
+                      {
+                        onClick: this.handleSend,
+                        disabled: !this.state.input.trim(),
+                        style: Object.assign({}, styles.chatButton, styles.chatButtonPrimary, {
+                          opacity: (!this.state.input.trim()) ? 0.6 : 1,
+                          cursor: (!this.state.input.trim()) ? "not-allowed" : "pointer"
+                        })
+                      },
+                      "Send"
+                    )
               )
             )
-          )
           )
         );
       }
@@ -1473,19 +1473,23 @@
       alignItems: "center",
       marginTop: "8px",
     },
+    buttonGroup: {
+      display: "flex",
+      gap: "8px",
+    },
     // Chat button styles - unified for consistency
     chatButton: {
       border: "none",
       borderRadius: "6px",
       cursor: "pointer",
-      fontSize: "12px",
+      fontSize: "13px",
       fontWeight: "500",
+      padding: "8px 16px",
       transition: "all 0.2s ease",
     },
     chatButtonPrimary: {
       background: "var(--theme-primary)",
       color: "#fff",
-      padding: "8px 16px",
     },
     chatButtonPrimaryHover: {
       background: "var(--theme-primary-hover)",
@@ -1493,7 +1497,6 @@
     chatButtonDanger: {
       background: "#dc2626",
       color: "#fff",
-      padding: "8px 16px",
     },
     chatButtonDangerHover: {
       background: "#b91c1c",
@@ -1501,7 +1504,6 @@
     chatButtonSecondary: {
       background: "var(--theme-accent)",
       color: "#fff",
-      padding: "8px 12px",
     },
     chatButtonSecondaryHover: {
       background: "#64748b",

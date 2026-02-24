@@ -882,38 +882,45 @@
             React.createElement(
               "div",
               { style: styles.chatControls },
+              // Clear button - separate from send/cancel group
               React.createElement(
                 "button",
                 {
                   onClick: this.clearHistory,
-                  style: styles.smallButton,
+                  style: Object.assign({}, styles.chatButton, styles.chatButtonSecondary),
                   title: "Clear chat history"
                 },
                 "Clear"
               ),
-              this.state.isTyping && React.createElement(
-                "button",
-                {
-                  onClick: function() { 
-                    if (self._currentCancelToken) self._currentCancelToken.abort(); 
+              // Send/Cancel button group
+              React.createElement(
+                "div",
+                { style: { display: "flex", gap: "8px" } },
+                this.state.isTyping && React.createElement(
+                  "button",
+                  {
+                    onClick: function() { 
+                      if (self._currentCancelToken) self._currentCancelToken.abort(); 
+                    },
+                    style: Object.assign({}, styles.chatButton, styles.chatButtonDanger),
+                    title: "Cancel streaming response"
                   },
-                  style: Object.assign({}, styles.sendButton, { background: "#dc2626" }),
-                  title: "Cancel streaming response"
-                },
-                "Cancel"
+                "❌ Cancel"
               ),
               React.createElement(
                 "button",
                 {
                   onClick: this.handleSend,
                   disabled: !this.state.input.trim() || this.state.isTyping,
-                  style: Object.assign({}, styles.sendButton, {
-                    opacity: (!this.state.input.trim() || this.state.isTyping) ? 0.5 : 1
+                  style: Object.assign({}, styles.chatButton, styles.chatButtonPrimary, {
+                    opacity: (!this.state.input.trim() || this.state.isTyping) ? 0.6 : 1,
+                    cursor: (!this.state.input.trim() || this.state.isTyping) ? "not-allowed" : "pointer"
                   })
                 },
-                this.state.isTyping ? "..." : "Send"
+                this.state.isTyping ? "..." : "Send ✅"
               )
             )
+          )
           )
         );
       }
@@ -1466,6 +1473,40 @@
       alignItems: "center",
       marginTop: "8px",
     },
+    // Chat button styles - unified for consistency
+    chatButton: {
+      border: "none",
+      borderRadius: "6px",
+      cursor: "pointer",
+      fontSize: "12px",
+      fontWeight: "500",
+      transition: "all 0.2s ease",
+    },
+    chatButtonPrimary: {
+      background: "var(--theme-primary)",
+      color: "#fff",
+      padding: "8px 16px",
+    },
+    chatButtonPrimaryHover: {
+      background: "var(--theme-primary-hover)",
+    },
+    chatButtonDanger: {
+      background: "#dc2626",
+      color: "#fff",
+      padding: "8px 16px",
+    },
+    chatButtonDangerHover: {
+      background: "#b91c1c",
+    },
+    chatButtonSecondary: {
+      background: "var(--theme-accent)",
+      color: "#fff",
+      padding: "8px 12px",
+    },
+    chatButtonSecondaryHover: {
+      background: "#64748b",
+    },
+    // Deprecated - kept for compatibility
     smallButton: {
       background: "var(--theme-accent)",
       color: "#fff",

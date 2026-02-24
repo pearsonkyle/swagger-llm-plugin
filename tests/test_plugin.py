@@ -10,8 +10,8 @@ import pytest
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 
-from swagger_llm_ui import LLMConfig, get_llm_config, setup_llm_docs
-from swagger_llm_ui.plugin import get_swagger_ui_html
+from swagger_llm import LLMConfig, get_llm_config, setup_llm_docs
+from swagger_llm.plugin import get_swagger_ui_html
 
 
 # ── Fixtures ─────────────────────────────────────────────────────────────────

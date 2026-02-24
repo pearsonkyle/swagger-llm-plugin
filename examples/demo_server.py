@@ -18,7 +18,7 @@ import os
 # Allow running from the repo root without installing the package
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from swagger_llm_ui import LLMConfig, get_llm_config, setup_llm_docs
+from swagger_llm import LLMConfig, get_llm_config, setup_llm_docs
 
 app = FastAPI(
     title="swagger-llm-ui Demo",

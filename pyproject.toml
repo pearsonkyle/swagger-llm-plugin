@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "swagger-llm-ui"
+name = "swagger-llm"
 version = "0.2.0"
 description = "Add an LLM configuration panel to your FastAPI Swagger UI docs"
 readme = "README.md"
@@ -40,8 +40,8 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/pearsonkyle/swagger-llm-ui"
-Repository = "https://github.com/pearsonkyle/swagger-llm-ui"
+Homepage = "https://github.com/pearsonkyle/swagger-llm"
+Repository = "https://github.com/pearsonkyle/swagger-llm"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/swagger_llm_ui"]

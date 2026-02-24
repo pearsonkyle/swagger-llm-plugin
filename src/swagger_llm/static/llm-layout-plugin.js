@@ -15,8 +15,8 @@
       var LLMSettingsPanel = system.getComponent("LLMSettingsPanel", true);
       var ChatPanel = system.getComponent("ChatPanel", true);
 
-      // Get saved tab preference, default to "explorer"
-      var savedTab = localStorage.getItem(TAB_STORAGE_KEY) || "explorer";
+      // Get saved tab preference, default to "api"
+      var savedTab = localStorage.getItem(TAB_STORAGE_KEY) || "api";
       var _state = React.useState(savedTab);
       var activeTab = _state[0];
       var setActiveTab = _state[1];
@@ -57,11 +57,11 @@
           React.createElement(
             "div",
             { style: { display: "flex", gap: "2px", padding: "8px 8px 0 8px" } },
-            // API Explorer tab
+            // API tab
             React.createElement(
               "button",
-              { onClick: function () { setActiveTab("explorer"); }, style: tabStyle("explorer") },
-              "API Explorer"
+              { onClick: function () { setActiveTab("api"); }, style: tabStyle("api") },
+              "API"
             ),
             // Chat tab
             React.createElement(
@@ -89,8 +89,8 @@
               background: "var(--theme-header-bg)",
             }
           },
-          // API Explorer tab content
-          activeTab === "explorer" ? React.createElement(BaseLayout, props) : null,
+          // API api tab content
+          activeTab === "api" ? React.createElement(BaseLayout, props) : null,
           
           // Chat tab content
           activeTab === "chat" ? React.createElement(ChatPanel, null) : null,

@@ -129,15 +129,6 @@ def test_provider_presets_available():
         assert provider in js_content.lower() or provider.upper() in js_content
 
 
-def test_keyboard_shortcut_registered():
-    """Verify keyboard shortcut for panel toggle is registered."""
-    client = TestClient(make_app())
-    html = client.get("/docs").text
-    
-    assert "keydown" in html.lower()
-    assert "metaKey" in html or "ctrlKey" in html
-
-
 def test_number_coercion_fix():
     """Test that Number() coercion handles empty strings correctly."""
     client = TestClient(make_app())
@@ -180,8 +171,7 @@ def test_code_generator_functions():
     # Check for curl generation
     assert "curl" in js_content.lower()
 
-    # Note: Code generator is in a separate file (code-export-plugin.js)
-    # but the main plugin has curl-related functions
+    # Note: Code generators were removed from the plugin in v0.3.0
     assert "generateCurl" in js_content or "curl" in js_content.lower()
 
 

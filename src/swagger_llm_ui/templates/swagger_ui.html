@@ -71,84 +71,6 @@
         }
       }
 
-      // Generate curl command from request
-      function generateCurl(request) {
-        var url = request.url;
-        if (request.queryParams && Object.keys(request.queryParams).length > 0) {
-          var queryParams = Object.entries(request.queryParams)
-            .map(function ([key, value]) { return key + '=' + encodeURIComponent(value); })
-            .join('&');
-          url = url.split('?')[0] + '?' + queryParams;
-        }
-
-        var headers = request.headers || {};
-        var body = request.body ? JSON.parse(request.body) : null;
-
-        var curl = ['curl -X ' + request.method + ' \\\\' ];
-
-        Object.entries(headers).forEach(function ([key, value]) {
-          if (value !== undefined && key.toLowerCase() !== 'content-length') {
-            curl.push('  -H "' + key + ': ' + value.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '" \\\\');
-          }
-        });
-
-        if (body && Object.keys(body).length > 0) {
-          curl.push('  -d \'' + JSON.stringify(body, null, 2) + '\' \\\\');
-        }
-
-        curl.push('  "' + url.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"');
-        return curl.join('\n');
-      }
-
-      // Python httpx code snippet generator
-      function generatePythonCode(request, settings) {
-        var url = request.url;
-        if (request.queryParams && Object.keys(request.queryParams).length > 0) {
-          var queryParams = Object.entries(request.queryParams)
-            .map(function ([key, value]) { return key + '=' + encodeURIComponent(value); })
-            .join('&');
-          url = url.split('?')[0] + '?' + queryParams;
-        }
-
-        var headers = request.headers || {};
-        var body = request.body ? JSON.parse(request.body) : null;
-
-        var code = ['import httpx', ''];
-        
-        // Add LLM config
-        code.push('# LLM Configuration');
-        code.push('llm_base_url = "' + (settings.baseUrl || '') + '"');
-        code.push('llm_api_key = "' + (settings.apiKey || 'None') + '"');
-        code.push('llm_model_id = "' + (settings.modelId || 'gpt-4') + '"');
-        code.push('');
-        
-        code.push('async with httpx.AsyncClient() as client:');
-        code.push('    response = await client.' + request.method.toLowerCase() + '("');
-        code.push('        "' + url.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '",');
-        
-        if (Object.keys(headers).length > 0) {
-          code.push('        headers={');
-          Object.entries(headers).forEach(function ([key, value], i) {
-            if (value !== undefined && key.toLowerCase() !== 'content-length') {
-              var comma = i < Object.keys(headers).length - 1 ? ',' : '';
-              code.push('            "' + key + '": "' + value.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"' + comma);
-            }
-          });
-          code.push('        },');
-        }
-
-        if (body && Object.keys(body).length > 0) {
-          code.push('        json=' + JSON.stringify(body, null, 6).replace(/\n/g, '\n            ') + ',');
-        }
-
-        code.push('    )');
-        code.push('');
-        code.push('print(response.status_code)');
-        code.push('print(response.json())');
-
-        return code.join('\n');
-      }
-
       window.onload = function () {
         var ui = SwaggerUIBundle({
           url: "{{ openapi_url }}",
@@ -183,20 +105,6 @@
           },
         });
         window.ui = ui;
-
-        // Keyboard shortcut: Cmd/Ctrl+Shift+L to toggle LLM panel
-        document.addEventListener('keydown', function (e) {
-          if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'L') {
-            e.preventDefault();
-            var panel = document.getElementById('llm-settings-panel');
-            if (panel) {
-              var existingToggle = panel.querySelector('.llm-toggle-btn');
-              if (existingToggle && typeof existingToggle.click === 'function') {
-                existingToggle.click();
-              }
-            }
-          }
-        });
       };
     </script>
   </body>

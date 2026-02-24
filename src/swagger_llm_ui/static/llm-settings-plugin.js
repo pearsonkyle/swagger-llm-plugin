@@ -990,93 +990,48 @@
             : s.connectionStatus
         );
 
-        var header = React.createElement(
+        // When used as a tab, render the full panel without collapsible header
+        var bodyContent = React.createElement(
           "div",
-          {
-            onClick: this.toggleOpen,
-            style: {
-              display: "flex",
-              alignItems: "center",
-              cursor: "pointer",
-              padding: "10px 16px",
-              background: "#111827",
-              borderBottom: s.settingsOpen ? "1px solid #374151" : "none",
-              userSelect: "none",
-            },
-          },
-          React.createElement("span", { style: { fontSize: "16px", marginRight: "8px" } }, "🤖"),
+          { style: { padding: "16px", background: "#1f2937" } },
+          fields,
           React.createElement(
-            "span",
-            { style: { fontWeight: "600", color: "#e5e7eb", fontSize: "14px", flexGrow: 1 } },
-            "LLM Settings"
+            "div",
+            { style: { display: "flex", alignItems: "center", marginTop: "8px" } },
+            saveButton,
+            testButton,
+            statusBadge
           ),
-          providerBadge,
           React.createElement(
-            "span",
-            { style: { color: "#6b7280", fontSize: "12px", cursor: "pointer" } },
-            s.settingsOpen ? "▲ collapse" : "▼ expand"
-          )
-        );
-
-        var body = s.settingsOpen
-          ? React.createElement(
+            "div",
+            { style: { marginTop: "12px", padding: "10px", background: "#374151", borderRadius: "4px" } },
+            React.createElement(
               "div",
-              { style: { padding: "16px", background: "#1f2937" } },
-              fields,
+              { style: { fontSize: "12px", fontWeight: "600", color: "#e5e7eb", marginBottom: "8px" } },
+              "Quick Actions"
+            ),
+            React.createElement(
+              "div",
+              { style: { display: "flex", gap: "8px" } },
               React.createElement(
-                "div",
-                { style: { display: "flex", alignItems: "center", marginTop: "8px" } },
-                saveButton,
-                testButton,
-                statusBadge
-              ),
-              React.createElement(
-                "div",
-                { style: { marginTop: "12px", padding: "10px", background: "#374151", borderRadius: "4px" } },
-                React.createElement(
-                  "div",
-                  { style: { fontSize: "12px", fontWeight: "600", color: "#e5e7eb", marginBottom: "8px" } },
-                  "Quick Actions"
-                ),
-                React.createElement(
-                  "div",
-                  { style: { display: "flex", gap: "8px" } },
-                  React.createElement(
-                    "button",
-                    {
-                      onClick: function () { self.setState({ settingsOpen: false }); },
-                      style: {
-                        background: "#2563eb",
-                        color: "#fff",
-                        border: "none",
-                        borderRadius: "4px",
-                        padding: "6px 12px",
-                        cursor: "pointer",
-                        fontSize: "11px"
-                      }
-                    },
-                    "Hide Panel"
-                  ),
-                  React.createElement(
-                    "button",
-                    {
-                      onClick: function () { window.ui.specActions.download(); },
-                      style: {
-                        background: "#4b5563",
-                        color: "#fff",
-                        border: "none",
-                        borderRadius: "4px",
-                        padding: "6px 12px",
-                        cursor: "pointer",
-                        fontSize: "11px"
-                      }
-                    },
-                    "Download OpenAPI"
-                  )
-                )
+                "button",
+                {
+                  onClick: function () { window.ui.specActions.download(); },
+                  style: {
+                    background: "#4b5563",
+                    color: "#fff",
+                    border: "none",
+                    borderRadius: "4px",
+                    padding: "6px 12px",
+                    cursor: "pointer",
+                    fontSize: "11px"
+                  }
+                },
+                "Download OpenAPI"
               )
             )
-          : null;
+          )
+        );
 
         return React.createElement(
           "div",
@@ -1084,14 +1039,10 @@
             id: "llm-settings-panel",
             style: {
               fontFamily: "'Inter', 'Segoe UI', sans-serif",
-              border: "1px solid #374151",
-              borderRadius: "6px",
-              margin: "0 0 16px 0",
-              overflow: "hidden",
+              minHeight: "400px",
             },
           },
-          header,
-          body
+          bodyContent
         );
       }
     };

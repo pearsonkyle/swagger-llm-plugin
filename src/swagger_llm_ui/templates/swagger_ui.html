@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>{{ title }}</title>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" type="text/css" href="{{ swagger_css_url }}" />
+    <link rel="stylesheet" type="text/css" href="{{ theme_css_url }}" />
+  </head>
+  <body>
+    <div id="swagger-ui"></div>
+
+    <script src="{{ swagger_js_url }}"></script>
+    <script src="{{ llm_settings_js_url }}"></script>
+    <script src="{{ llm_layout_js_url }}"></script>
+
+    <style>
+      /* LLM Panel CSS - scoped to avoid conflicts */
+      #llm-settings-panel {
+        font-family: 'Inter', 'Segoe UI', sans-serif;
+      }
+      .llm-provider-badge {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 12px;
+        font-size: 11px;
+        margin-right: 8px;
+        color: #fff;
+      }
+      .llm-provider-openai { background-color: #10a37f; }
+      .llm-provider-anthropic { background-color: #d97757; }
+      .llm-provider-ollama { background-color: #2b90d8; }
+      .llm-provider-lmstudio { background-color: #6366f1; }
+      .llm-provider-vllm { background-color: #facc15; color: #1a1a1a; }
+      .llm-provider-azure { background-color: #0078d4; }
+    </style>
+
+    <script>
+      // Read LLM settings from localStorage (set by the LLMSettingsPanel)
+      var STORAGE_KEY = "swagger-llm-settings";
+
+      function getLLMSettings() {
+        try {
+          var raw = localStorage.getItem(STORAGE_KEY);
+          return raw ? JSON.parse(raw) : {};
+        } catch (e) {
+          return {};
+        }
+      }
+
+      window.onload = function () {
+        var ui = SwaggerUIBundle({
+          url: "{{ openapi_url }}",
+          dom_id: "#swagger-ui",
+          presets: [SwaggerUIBundle.presets.apis, SwaggerUIBundle.SwaggerUIStandalonePreset],
+          plugins: [
+            SwaggerUIBundle.plugins.DownloadUrl,
+            LLMSettingsPlugin,
+            LLMLayoutPlugin,
+          ],
+          layout: "LLMDocsLayout",
+
+          // Inject X-LLM-* headers into every request made from the docs page
+          requestInterceptor: function (request) {
+            var settings = getLLMSettings();
+            if (settings.baseUrl) {
+              request.headers["X-LLM-Base-Url"] = settings.baseUrl;
+            }
+            if (settings.apiKey) {
+              request.headers["X-LLM-Api-Key"] = settings.apiKey;
+            }
+            if (settings.modelId) {
+              request.headers["X-LLM-Model-Id"] = settings.modelId;
+            }
+            if (settings.maxTokens != null && settings.maxTokens !== '') {
+              request.headers["X-LLM-Max-Tokens"] = String(settings.maxTokens);
+            }
+            if (settings.temperature != null && settings.temperature !== '') {
+              request.headers["X-LLM-Temperature"] = String(settings.temperature);
+            }
+            return request;
+          },
+        });
+        window.ui = ui;
+      };
+    </script>
+  </body>
+</html>

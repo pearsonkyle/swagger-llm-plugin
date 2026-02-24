@@ -1,0 +1,54 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "swagger-llm-ui"
+version = "0.2.0"
+description = "Add an LLM configuration panel to your FastAPI Swagger UI docs"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.9"
+authors = [
+    { name = "Kyle Pearson" }
+]
+keywords = ["fastapi", "swagger", "llm", "openai", "docs"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Framework :: FastAPI",
+]
+dependencies = [
+    "fastapi>=0.95.0",
+    "jinja2>=3.0.0",
+    "httpx>=0.23.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "uvicorn[standard]>=0.20.0",
+    "pytest>=7.0.0",
+    "anyio[trio]>=3.0.0",
+    "pytest-anyio>=0.0.0",
+    "httpx>=0.23.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/pearsonkyle/swagger-llm-ui"
+Repository = "https://github.com/pearsonkyle/swagger-llm-ui"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/swagger_llm_ui"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/swagger_llm_ui/static" = "swagger_llm_ui/static"
+"src/swagger_llm_ui/templates" = "swagger_llm_ui/templates"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

@@ -1,6 +1,6 @@
 # swagger-llm-ui
 
-> Add an LLM configuration panel to your FastAPI Swagger UI docs page.
+> Add an LLM-enhanced API documentation to your FastAPI Swagger UI docs page.
 
 `swagger-llm-ui` injects a collapsible **LLM Settings** panel at the top of your
 FastAPI `/docs` page.  Users fill in their OpenAI-compatible API details (base URL,
@@ -17,6 +17,9 @@ API key, model, etc.) directly in the browser.  Those settings are saved to
 - 💾 **Persistent** – settings survive page reloads via `localStorage`
 - 🔒 **Header injection** – all Try-it-out calls carry `X-LLM-*` headers
 - ⚡ **FastAPI dependency** – `get_llm_config()` extracts config from headers with one line
+- 💬 **AI Chat Assistant** – ask questions about your API documentation with full OpenAPI context
+- 📚 **Smart Context** – chat bot uses your `/openapi.json` schema to answer questions accurately
+- 🎨 **Theme Support** – dark/light themes with custom color customization
 
 ---
 
@@ -40,8 +43,22 @@ app = FastAPI(title="My API")
 setup_llm_docs(app)
 ```
 
-That's it.  Open `http://localhost:8000/docs` and you'll see the LLM Settings panel
-at the top of the page.
+That's it.  Open `http://localhost:8000/docs` and you'll see:
+1. The LLM Settings panel at the top of the page
+2. Three tabs: **API Explorer**, **Chat**, and **Settings**
+
+### Using the Chat Bot
+
+The chat bot uses your `/openapi.json` schema to answer questions about your API:
+
+1. Open the **Chat** tab in the docs page
+2. Ask questions like:
+   - "What endpoints are available?"
+   - "How do I use the chat completions endpoint?"
+   - "Generate a curl command for /health"
+3. The bot has full access to your API's OpenAPI schema
+
+The OpenAPI schema is automatically fetched and used as context for all chat messages.
 
 ---
 
@@ -60,6 +77,39 @@ async def chat(body: ChatRequest, llm: LLMConfig = Depends(get_llm_config)):
 
 ---
 
+## Chat Bot Features
+
+The chat bot has access to your API's OpenAPI schema and can answer questions
+about endpoints, parameters, request bodies, and responses.
+
+### Supported Questions
+
+The chat bot can answer questions like:
+
+- **General API info:** "What endpoints are available?" or "Tell me about this API"
+- **Endpoint details:** "How do I use the /users endpoint?" or "What parameters does /search accept?"
+- **Request examples:** "Generate a curl command for /health"
+- **Schema information:** "What fields are in the User model?"
+
+### How It Works
+
+1. The chat panel fetches `/openapi.json` from your API
+2. The full schema is converted to a human-readable context format
+3. This context is sent as the system prompt with each chat message
+4. The LLM uses this information to answer questions accurately
+
+### Providers Supported
+
+Any OpenAI-compatible API works:
+- **OpenAI** - `https://api.openai.com/v1`
+- **Anthropic** - `https://api.anthropic.com/v1`
+- **Ollama** - `http://localhost:11434/v1` (local)
+- **LM Studio** - `http://localhost:1234/v1` (local)
+- **vLLM** - `http://localhost:8000/v1` (local)
+- **Azure OpenAI** - Custom endpoint
+
+---
+
 ## Configuration Options
 
 ### `setup_llm_docs(app, ...)`
@@ -71,6 +121,7 @@ async def chat(body: ChatRequest, llm: LLMConfig = Depends(get_llm_config)):
 | `openapi_url` | `app.openapi_url` | URL of the OpenAPI JSON schema |
 | `swagger_js_url` | jsDelivr CDN | Swagger UI JS bundle URL |
 | `swagger_css_url` | jsDelivr CDN | Swagger UI CSS URL |
+| `debug` | `False` | Enable auto-reload for development |
 
 ### `LLMConfig` fields
 

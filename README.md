@@ -1,5 +1,7 @@
 # Swagger LLM Plugin
 
+![](examples/example.gif)
+
 > Add an LLM-enhanced API documentation to your FastAPI Swagger UI docs page.
 
 `swagger-llm-ui` injects a collapsible **LLM Settings** panel at the top of your

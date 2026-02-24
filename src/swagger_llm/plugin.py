@@ -173,7 +173,6 @@ def build_openapi_context(schema: Dict[str, Any]) -> str:
                         name = param.get("name", "unknown")
                         in_loc = param.get("in", "query")
                         required = param.get("required", False)
-                        ptype = param.get("type", "string")
                         desc = param.get("description", "")
                         
                         req_str = "[required]" if required else "[optional]"

@@ -152,7 +152,7 @@ async def chat_completions(
 
     payload: Dict[str, Any] = {
         "model": body.model or llm.model_id,
-        "messages": [m.dict() for m in body.messages],
+        "messages": [m.model_dump() for m in body.messages],
         "max_tokens": body.max_tokens or llm.max_tokens,
         "temperature": body.temperature if body.temperature is not None else llm.temperature,
     }
@@ -183,7 +183,7 @@ async def chat_completions_stream(
     # For streaming, we need to set up the payload without max_tokens if not specified
     payload: Dict[str, Any] = {
         "model": body.model or llm.model_id,
-        "messages": [m.dict() for m in body.messages],
+        "messages": [m.model_dump() for m in body.messages],
         "temperature": body.temperature if body.temperature is not None else llm.temperature,
     }
 

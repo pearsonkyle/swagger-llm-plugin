@@ -132,19 +132,19 @@ def setup_llm_docs(
         app.docs_url = None
         app.redoc_url = None
 
+        # Mount static files for the plugin JS inside the lock to prevent TOCTOU race
+        already_mounted = any(
+            getattr(r, "name", None) == "swagger-llm-static" for r in app.router.routes
+        )
+        if not already_mounted:
+            app.mount(
+                "/swagger-llm-static",
+                StaticFiles(directory=str(_STATIC_DIR)),
+                name="swagger-llm-static",
+            )
+
         # Mark this app as having LLM docs setup
         _llm_apps.add(app)
-
-    # Mount static files for the plugin JS (outside lock to avoid blocking)
-    already_mounted = any(
-        getattr(r, "name", None) == "swagger-llm-static" for r in app.router.routes
-    )
-    if not already_mounted:
-        app.mount(
-            "/swagger-llm-static",
-            StaticFiles(directory=str(_STATIC_DIR)),
-            name="swagger-llm-static",
-        )
 
     # Register the custom docs route
     @app.get(docs_url, include_in_schema=False)

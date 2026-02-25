@@ -351,17 +351,22 @@
     try {
       if (marked) {
         var html = marked.parse(text);
+        // Always sanitize - DOMPurify loads from CDN in template
         if (typeof DOMPurify !== 'undefined') {
           return DOMPurify.sanitize(html);
         }
-        return html;
+        // If DOMPurify not available, fallback to strict plain text
+        console.warn('DOMPurify not loaded - using safe fallback');
+        var escaped = text.replace(/&/g, '&').replace(/</g, '<').replace(/>/g, '>');
+        return escaped.replace(/\n/g, '<br>');
       }
     } catch (e) {
       console.error('Markdown parsing error:', e);
+      // Fallback on any error: return escaped plain text
     }
 
     // Fallback: plain text with line breaks, sanitized
-    var escaped = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    var escaped = text.replace(/&/g, '&').replace(/</g, '<').replace(/>/g, '>');
     return escaped.replace(/\n/g, '<br>');
   }
 
@@ -1882,6 +1887,9 @@
         this.handleMaxTokensChange = this.handleMaxTokensChange.bind(this);
         this.handleTemperatureChange = this.handleTemperatureChange.bind(this);
         this.handleThemeChange = this.handleThemeChange.bind(this);
+        this.handleEnableToolsChange = this.handleEnableToolsChange.bind(this);
+        this.handleAutoExecuteChange = this.handleAutoExecuteChange.bind(this);
+        this.handleToolApiKeyChange = this.handleToolApiKeyChange.bind(this);
       }
 
       _saveSettings() {
@@ -2123,7 +2131,7 @@
 
         var providerBadge = React.createElement(
           "span",
-          { className: "llm-provider-badge llm-provider-" + (s.provider === 'custom' ? 'openai' : s.provider), style: { fontSize: "10px", padding: "2px 8px", borderRadius: "10px", marginLeft: "8px" } },
+          { className: "llm-provider-badge llm-provider-" + s.provider, style: { fontSize: "10px", padding: "2px 8px", borderRadius: "10px", marginLeft: "8px" } },
           provider.name
         );
 
@@ -2398,19 +2406,19 @@
             ),
           React.createElement(systemPromptPresetSelector, {
             value: s.systemPromptPreset || 'api_assistant',
-            onChange: function(val) {
-              this.setState({ systemPromptPreset: val });
+            onChange: (function(val) {
+              self.setState({ systemPromptPreset: val });
               var stored = loadFromStorage();
               stored.systemPromptPreset = val;
               saveToStorage(stored);
-            }.bind(this),
+            }),
             customPrompt: s.customSystemPrompt || '',
-            onCustomChange: function(val) {
-              this.setState({ customSystemPrompt: val });
+            onCustomChange: (function(val) {
+              self.setState({ customSystemPrompt: val });
               var stored = loadFromStorage();
               stored.customSystemPrompt = val;
               saveToStorage(stored);
-            }.bind(this),
+            }),
             labelStyle: Object.assign({}, labelStyle, { color: "var(--theme-text-primary)" }),
             inputStyle: Object.assign({}, inputStyle, { marginBottom: '8px', fontSize: '12px' })
           })

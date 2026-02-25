@@ -23,20 +23,9 @@ app = FastAPI(
     title="Demo Server",
     version="0.3.0",
     description="""
-A demonstration of the swagger-llm-plugin package with LLM-enhanced API documentation.
+A demonstration of LLM-enhanced API documentation using the [swagger-llm-plugin](https://github.com/pearsonkyle/swagger-llm-plugin).
 
-## Features
-- Provider presets for Ollama, LM Studio, vLLM
-- Interactive chat panel with SSE streaming
-
-## Client-Side LLM Architecture
-Since locally-hosted LLMs support CORS, the browser talks directly to them:
-- No server proxy endpoint required
-- No X-LLM-* header forwarding needed  
-- OpenAPI schema formatted client-side and sent to {baseUrl}/chat/completions
-
-Configure your LLM provider settings in the "Settings" tab. The browser will
-use those directly to call the LLM's API endpoint.
+Use the tabs above to explore the chat interface and settings panel where you can configure your local LLM providers (Ollama, LM Studio, vLLM).
 """,
 )
 

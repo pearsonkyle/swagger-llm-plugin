@@ -54,15 +54,18 @@
         };
       };
 
-      // Content area style - full height for chat
+      // Content area style - full height for chat and settings
+      var isContained = activeTab === "chat" || activeTab === "settings";
       var contentStyle = {
         border: "1px solid var(--theme-border-color)",
         borderTop: "none",
         borderRadius: "0 0 6px 6px",
         background: "var(--theme-header-bg)",
-        height: activeTab === "chat" ? "calc(100vh - 120px)" : "auto",
-        minHeight: activeTab === "chat" ? "400px" : "auto",
-        overflow: activeTab === "chat" ? "hidden" : "auto",
+        height: isContained ? "calc(100vh - 120px)" : "auto",
+        minHeight: isContained ? "400px" : "auto",
+        overflow: activeTab === "chat" ? "hidden" : (activeTab === "settings" ? "auto" : "auto"),
+        overscrollBehavior: "contain",
+        WebkitOverflowScrolling: "touch",
       };
 
       return React.createElement(

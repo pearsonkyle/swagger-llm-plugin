@@ -1774,7 +1774,7 @@
 
         return React.createElement(
           "div",
-          { className: "llm-chat-container", style: { display: 'flex', flexDirection: 'column', height: 'calc(100vh - 90px)', minHeight: '300px' } },
+          { className: "llm-chat-container", style: { display: 'flex', flexDirection: 'column', height: '100%', minHeight: '300px' } },
           React.createElement(
             "div",
             { id: "llm-chat-messages", style: { flex: 1, overflowY: 'auto', padding: '12px', display: 'flex', flexDirection: 'column', gap: '12px', scrollBehavior: 'smooth' } },
@@ -2330,6 +2330,7 @@
           )
         );
 
+        // Status indicator (moved to top of LLM Configuration section)
         var testButton = React.createElement(
           "button",
           {
@@ -2381,6 +2382,11 @@
             "div",
             { style: { marginBottom: "24px", paddingBottom: "20px", borderBottom: "1px solid var(--theme-border-color)" } },
             React.createElement("h3", { style: { color: "var(--theme-text-primary)", fontSize: "14px", fontWeight: "600", marginBottom: "12px" } }, "LLM Configuration"),
+            React.createElement("div", { style: { display: "flex", alignItems: "center", marginBottom: "16px" } },
+              testButton,
+              React.createElement("div", { style: { flex: 1 } }),
+              statusBadge
+            ),
             fields
           ),
           React.createElement(
@@ -2424,14 +2430,7 @@
               )
             )
           ),
-          toolCallSettings,
-          React.createElement(
-            "div",
-            { style: { display: "flex", alignItems: "center" } },
-            testButton,
-            React.createElement("div", { style: { flex: 1 } }),
-            statusBadge
-          )
+          toolCallSettings
         );
 
         return React.createElement(
@@ -2663,7 +2662,7 @@
     '.llm-typing-dot:nth-child(1) { animation-delay: -0.32s; }',
     '.llm-typing-dot:nth-child(2) { animation-delay: -0.16s; }',
 
-    '.llm-chat-input-area { width: 100%; box-sizing: border-box; flex-shrink: 0; position: sticky; bottom: 0; }',
+    '.llm-chat-input-area { width: 100%; box-sizing: border-box; flex-shrink: 0; }',
     
     '.llm-chat-input-area textarea { width: 100%; box-sizing: border-box; overflow-x: hidden; word-wrap: break-word; }',
 

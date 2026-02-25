@@ -4,6 +4,76 @@
 (function () {
   "use strict";
 
+  // ── System Prompt Preset Configuration (load from JSON) ───────────────────
+  var SYSTEM_PROMPT_CONFIG = null;
+  
+  function loadSystemPromptConfig() {
+    if (SYSTEM_PROMPT_CONFIG) return SYSTEM_PROMPT_CONFIG;
+    
+    try {
+      var xhr = new XMLHttpRequest();
+      xhr.open('GET', '/swagger-llm-static/system-prompt-config.json', true);
+      xhr.timeout = 3000;
+      xhr.onload = function() {
+        if (xhr.status === 200) {
+          try {
+            SYSTEM_PROMPT_CONFIG = JSON.parse(xhr.responseText);
+            // Config loaded successfully
+          } catch (e) {
+            console.error('Failed to parse system-prompt-config.json:', e);
+          }
+        }
+      };
+      xhr.send();
+    } catch (e) {
+      console.error('Failed to load system-prompt-config.json:', e);
+    }
+    
+    // Return default if config fails to load
+    return {
+      presets: {},
+      defaultPreset: 'api_assistant'
+    };
+  }
+
+  // ── Get system prompt for a preset ────────────────────────────────────────
+  function getSystemPromptForPreset(presetName, openapiSchema) {
+    var config = loadSystemPromptConfig();
+    var preset = (config.presets || {})[presetName];
+    
+    if (!preset) {
+      // Fallback to API Assistant preset
+      var defaultConfig = config.presets || {};
+      if (defaultConfig.api_assistant) {
+        preset = defaultConfig.api_assistant;
+      } else {
+        return buildDefaultSystemPrompt(openapiSchema);
+      }
+    }
+    
+    var prompt = preset.prompt || '';
+    
+    // Replace {openapi_context} with actual schema
+    if (prompt.includes('{openapi_context}') && openapiSchema) {
+      var context = buildOpenApiContext(openapiSchema);
+      prompt = prompt.replace('{openapi_context}', '\n\n' + context + '\n');
+    }
+    
+    return prompt;
+  }
+
+  // ── Default system prompt builder (fallback) ──────────────────────────────
+  function buildDefaultSystemPrompt(schema) {
+    var lines = [];
+    lines.push('You are a helpful API assistant. The user is looking at an API documentation page for an OpenAPI-compliant REST API.');
+    
+    if (schema) {
+      lines.push(buildOpenApiContext(schema));
+    }
+    
+    return lines.join('\n\n');
+  }
+
   // ── LLM Provider configurations ─────────────────────────────────────────────
   var LLM_PROVIDERS = {
     ollama: { name: 'Ollama', url: 'http://localhost:11434/v1' },
@@ -251,9 +321,17 @@
     script.async = true;
     document.head.appendChild(script);
     
-    var promise = new Promise(function(resolve) {
+    var promise = new Promise(function(resolve, reject) {
+      var timedOut = false;
+      var timeout = setTimeout(function() {
+        timedOut = true;
+        reject(new Error('marked.js failed to load within 10 seconds'));
+      }, 10000);
+
       var checkLoaded = function() {
+        if (timedOut) return;
         if (window.marked) {
+          clearTimeout(timeout);
           marked = window.marked;
           resolve(marked);
         } else {
@@ -270,27 +348,21 @@
   function parseMarkdown(text) {
     if (!text || typeof text !== 'string') return '';
 
-    var sanitized = text
-      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
-      .replace(/<iframe[^>]*>[\s\S]*?<\/iframe>/gi, '')
-      .replace(/<object[^>]*>[\s\S]*?<\/object>/gi, '')
-      .replace(/<embed[^>]*>/gi, '')
-      .replace(/<form[^>]*>[\s\S]*?<\/form>/gi, '');
-
     try {
       if (marked) {
-        var html = marked.parse(sanitized);
-        html = html
-          .replace(/\s+on\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]*)/gi, '')
-          .replace(/href\s*=\s*["']javascript:[^"']*["']/gi, 'href="#"')
-          .replace(/src\s*=\s*["']javascript:[^"']*["']/gi, 'src=""');
+        var html = marked.parse(text);
+        if (typeof DOMPurify !== 'undefined') {
+          return DOMPurify.sanitize(html);
+        }
         return html;
       }
     } catch (e) {
       console.error('Markdown parsing error:', e);
     }
 
-    return sanitized.replace(/\n/g, '<br>');
+    // Fallback: plain text with line breaks, sanitized
+    var escaped = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return escaped.replace(/\n/g, '<br>');
   }
 
   // ── Theme default configurations ─────────────────────────────────────────────
@@ -343,7 +415,8 @@
     } catch (e) {
       console.warn('Failed to load theme from localStorage:', e);
     }
-    return { theme: 'dark', customColors: {} };
+    // Default to light theme
+    return { theme: 'light', customColors: {} };
   }
 
   function saveTheme(themeData) {
@@ -419,6 +492,8 @@
   var SET_OPENAPI_SCHEMA = "LLM_SET_OPENAPI_SCHEMA";
   var SET_THEME = "LLM_SET_THEME";
   var SET_CUSTOM_COLOR = "LLM_SET_CUSTOM_COLOR";
+  var SET_SYSTEM_PROMPT_PRESET = "LLM_SET_SYSTEM_PROMPT_PRESET";
+  var SET_CUSTOM_SYSTEM_PROMPT = "LLM_SET_CUSTOM_SYSTEM_PROMPT";
 
   // ── Default state ───────────────────────────────────────────────────────────
   var storedSettings = loadFromStorage();
@@ -439,7 +514,7 @@
     settingsOpen: false,
     chatHistory: loadChatHistory(),
     lastError: "",
-    theme: storedTheme.theme || "dark",
+    theme: storedTheme.theme || "light",
     customColors: storedTheme.customColors || {},
   };
 
@@ -505,10 +580,7 @@
       case SET_SETTINGS_OPEN:
         return Object.assign({}, state, { settingsOpen: action.payload });
       case ADD_CHAT_MESSAGE:
-        var existingHistory = state.get ? state.get("chatHistory") : state.chatHistory;
-        if (existingHistory && typeof existingHistory.toJS === 'function') {
-          existingHistory = existingHistory.toJS();
-        }
+        var existingHistory = state.chatHistory;
         var newHistory = Array.isArray(existingHistory)
           ? existingHistory.concat([action.payload])
           : [action.payload];
@@ -560,19 +632,19 @@
 
   // ── Selectors ───────────────────────────────────────────────────────────────
   var selectors = {
-    getBaseUrl: function (state) { return state.get ? state.get("baseUrl") : state.baseUrl; },
-    getApiKey: function (state) { return state.get ? state.get("apiKey") : state.apiKey; },
-    getModelId: function (state) { return state.get ? state.get("modelId") : state.modelId; },
-    getMaxTokens: function (state) { return state.get ? state.get("maxTokens") : state.maxTokens; },
-    getTemperature: function (state) { return state.get ? state.get("temperature") : state.temperature; },
-    getConnectionStatus: function (state) { return state.get ? state.get("connectionStatus") : state.connectionStatus; },
-    getProvider: function (state) { return state.get ? state.get("provider") : state.provider; },
-    getSettingsOpen: function (state) { return state.get ? state.get("settingsOpen") : state.settingsOpen; },
-    getChatHistory: function (state) { return state.get ? state.get("chatHistory") : state.chatHistory || []; },
-    getOpenApiSchema: function (state) { return state.get ? state.get("openapiSchema") : state.openapiSchema; },
-    getLastError: function (state) { return state.get ? state.get("lastError") : state.lastError; },
-    getTheme: function (state) { return state.get ? state.get("theme") : state.theme; },
-    getCustomColors: function (state) { return state.get ? state.get("customColors") : state.customColors; },
+    getBaseUrl: function (state) { return state.baseUrl; },
+    getApiKey: function (state) { return state.apiKey; },
+    getModelId: function (state) { return state.modelId; },
+    getMaxTokens: function (state) { return state.maxTokens; },
+    getTemperature: function (state) { return state.temperature; },
+    getConnectionStatus: function (state) { return state.connectionStatus; },
+    getProvider: function (state) { return state.provider; },
+    getSettingsOpen: function (state) { return state.settingsOpen; },
+    getChatHistory: function (state) { return state.chatHistory || []; },
+    getOpenApiSchema: function (state) { return state.openapiSchema; },
+    getLastError: function (state) { return state.lastError; },
+    getTheme: function (state) { return state.theme; },
+    getCustomColors: function (state) { return state.customColors; },
   };
 
   // ── Status indicator ───────────────────────────────────────────────────────
@@ -601,6 +673,86 @@
     return Date.now() + '_' + (++_messageIdCounter);
   }
 
+    // ── System Prompt Preset Selector Component (for Settings panel) ───────────
+  function createSystemPromptPresetSelector(React) {
+    return function SystemPromptPresetSelector(props) {
+      var config = loadSystemPromptConfig();
+      var presets = config.presets || {};
+      var presetKeys = Object.keys(presets);
+      var selectedValue = props.value || 'api_assistant';
+      var isCustom = selectedValue === 'custom';
+
+      // Resolve the prompt text to display
+      var displayText = '';
+      if (isCustom) {
+        displayText = props.customPrompt || '';
+      } else {
+        var preset = presets[selectedValue];
+        if (preset) {
+          displayText = preset.prompt || '';
+        } else {
+          displayText = buildDefaultSystemPrompt(null);
+        }
+      }
+
+      // Description for the selected preset
+      var description = '';
+      if (!isCustom && presets[selectedValue]) {
+        description = presets[selectedValue].description || '';
+      }
+
+      var textareaStyle = Object.assign({}, props.inputStyle, {
+        resize: "vertical",
+        minHeight: "120px",
+        marginTop: "8px",
+        fontFamily: "'Consolas', 'Monaco', monospace",
+        fontSize: "12px",
+        lineHeight: "1.5",
+        whiteSpace: "pre-wrap",
+      });
+
+      return React.createElement(
+        "div",
+        { style: { marginBottom: "12px" } },
+        React.createElement("label", { style: props.labelStyle }, "System Prompt Preset"),
+        React.createElement(
+          "select",
+          {
+            value: selectedValue,
+            onChange: function(e) {
+              props.onChange(e.target.value);
+              var stored = loadFromStorage();
+              stored.systemPromptPreset = e.target.value;
+              saveToStorage(stored);
+            },
+            style: props.inputStyle
+          },
+          presetKeys.length > 0 ? presetKeys.map(function(key) {
+            return React.createElement("option", { key: key, value: key }, presets[key].name);
+          }) : React.createElement("option", { value: "api_assistant" }, "API Assistant"),
+          React.createElement("option", { value: "custom" }, "Custom...")
+        ),
+        description && React.createElement("div", {
+          style: { color: "var(--theme-text-secondary)", fontSize: "11px", marginTop: "4px", fontStyle: "italic" }
+        }, description),
+        React.createElement("textarea", {
+          value: displayText,
+          readOnly: !isCustom,
+          onChange: isCustom ? function(e) {
+            props.onCustomChange(e.target.value);
+            var stored = loadFromStorage();
+            stored.customSystemPrompt = e.target.value;
+            saveToStorage(stored);
+          } : undefined,
+          style: Object.assign({}, textareaStyle, !isCustom ? { opacity: 0.8, cursor: "default" } : {}),
+          placeholder: isCustom ? "Enter custom system prompt..." : ""
+        }),
+        !isCustom && React.createElement("div", {
+          style: { color: "var(--theme-text-secondary)", fontSize: "10px", marginTop: "4px" }
+        }, "{openapi_context} is replaced with your API schema at send time. Select \"Custom...\" to edit.")
+      );
+    };
+  }
   // ── Chat panel component ───────────────────────────────────────────────────
   function ChatPanelFactory(system) {
     var React = system.React;
@@ -623,6 +775,9 @@
           editBody: '{}',
           toolCallResponse: null,
           toolRetryCount: 0,
+          // System prompt preset state
+          selectedPreset: loadFromStorage().systemPromptPreset || 'api_assistant',
+          customSystemPrompt: loadFromStorage().customSystemPrompt || '',
         };
         this.handleSend = this.handleSend.bind(this);
         this.handleInputChange = this.handleInputChange.bind(this);
@@ -777,8 +932,10 @@
         // Build headers - only Authorization for tool calls
         var fetchHeaders = {};
         var toolSettings = loadToolSettings();
-        if (toolSettings.apiKey) {
-          fetchHeaders['Authorization'] = 'Bearer ' + toolSettings.apiKey;
+        // Only add Authorization header if there's a non-empty API key
+        var toolApiKey = toolSettings.apiKey && typeof toolSettings.apiKey === 'string' ? toolSettings.apiKey.trim() : '';
+        if (toolApiKey) {
+          fetchHeaders['Authorization'] = 'Bearer ' + toolApiKey;
         }
 
         var fetchOpts = {
@@ -794,20 +951,18 @@
 
         self.setState({ toolCallResponse: { status: 'loading', body: '' } });
 
-        console.log('[Tool Call]', s.editMethod, url, fetchOpts);
 
         fetch(url, fetchOpts)
           .then(function(res) {
             return res.text().then(function(text) {
               var responseObj = { status: res.status, statusText: res.statusText, body: text };
-              console.log('[Tool Call Response]', res.status, res.statusText, text.substring(0, 500));
               self.setState({ toolCallResponse: responseObj });
               self.sendToolResult(responseObj);
             });
           })
           .catch(function(err) {
             var responseObj = { status: 0, statusText: 'Network Error', body: err.message };
-            console.error('[Tool Call Error]', err);
+            console.error('[Tool Call Error]', err.message);
             self.setState({ toolCallResponse: responseObj });
             self.sendToolResult(responseObj);
           });
@@ -821,7 +976,7 @@
           var lastError = 'Status ' + responseObj.status + ' ' + (responseObj.statusText || '');
           var lastBody = (responseObj.body || '').substring(0, 500);
           var errorDetail = lastError + (lastBody ? '\n\n```\n' + lastBody + '\n```' : '');
-          console.error('[Tool Call] Max retries reached. Last error:', lastError, lastBody);
+          console.error('[Tool Call] Max retries reached.');
           self.addMessage({
             role: 'assistant',
             content: 'Max tool call retries (3) reached. Last error: ' + errorDetail + '\n\nPlease try a different approach.',
@@ -966,11 +1121,18 @@
           };
         }
         
-        if (lowerError.includes('cors') || 
-            lowerError.includes('access-control')) {
+        // Check for CORS errors based on network fetch behavior, not string matching
+        // Only flag as CORS if we get a network-level failure with no response
+        var isNetworkError = errorMsg.toLowerCase().includes('network error') || 
+                             errorMsg.toLowerCase().includes('failed to fetch') ||
+                             (errorMsg && !responseText);
+        
+        // True CORS errors typically show "Failed to fetch" or "NetworkError" 
+        // with status 0 and no response
+        if (responseObj && responseObj.status === 0 && isNetworkError) {
           return {
             title: "CORS Error",
-            message: "Cross-origin request blocked. This is usually a configuration issue with the LLM provider. Ensure your LLM server has CORS enabled.",
+            message: "Cross-origin request blocked. This is usually a configuration issue with the LLM provider.\n\nEnsure your LLM server has CORS enabled. For Ollama, LM Studio, or vLLM, this is typically enabled by default.",
             action: null,
             needsSettings: false
           };
@@ -985,21 +1147,24 @@
       }
 
       _renderErrorInChat(errorInfo) {
-        var self = this;
-        var errorHtml = '<div class="llm-error-message">';
-        errorHtml += '<div class="llm-error-title">' + errorInfo.title + '</div>';
-        errorHtml += '<div class="llm-error-text">' + errorInfo.message + '</div>';
-        
+        var React = system.React;
+        var children = [
+          React.createElement("div", { className: "llm-error-title" }, errorInfo.title),
+          React.createElement("div", { className: "llm-error-text" }, errorInfo.message)
+        ];
+
         if (errorInfo.needsSettings) {
-          errorHtml += '<div class="llm-error-actions">';
-          errorHtml += '<button class="llm-error-action-btn" onclick="window.llmOpenSettings && window.llmOpenSettings()">';
-          errorHtml += '⚙️ ' + errorInfo.action;
-          errorHtml += '</button></div>';
+          children.push(
+            React.createElement("div", { className: "llm-error-actions" },
+              React.createElement("button", {
+                className: "llm-error-action-btn",
+                onClick: function() { window.llmOpenSettings && window.llmOpenSettings(); }
+              }, "\u2699\uFE0F " + errorInfo.action)
+            )
+          );
         }
-        
-        errorHtml += '</div>';
-        
-        return errorHtml;
+
+        return React.createElement("div", { className: "llm-error-message" }, children);
       }
 
       // ── Direct LLM streaming helper (no server proxy) ───────────────────────
@@ -1007,6 +1172,15 @@
         var self = this;
         var settings = loadFromStorage();
         var toolSettings = loadToolSettings();
+
+        // Get system prompt from preset
+        var selectedPreset = this.state.selectedPreset || 'api_assistant';
+        var systemPrompt = getSystemPromptForPreset(selectedPreset, fullSchema);
+        
+        // Add tool calling instructions if enabled
+        if (toolSettings.enableTools) {
+          systemPrompt += "\n\nYou have access to the `api_request` tool to execute API calls. When the user asks you to call an endpoint, use the tool instead of just showing a curl command. If a tool call returns an error, you may retry with corrected parameters (up to 3 times).";
+        }
 
         var scrollToBottom = function() {
           var el = document.getElementById('llm-chat-messages');
@@ -1031,12 +1205,12 @@
             
             if (isErrorMsg) {
               var errorInfo = self._getErrorMessage({ message: content }, lastResponseText);
-              var errorHtml = self._renderErrorInChat(errorInfo);
-              self.addMessage({ 
-                role: 'assistant', 
-                content: errorHtml, 
+              self.addMessage({
+                role: 'assistant',
+                content: content,
                 messageId: streamMsgId,
-                isError: true 
+                isError: true,
+                _errorInfo: errorInfo
               });
             } else {
               self.addMessage({ role: 'assistant', content: content, messageId: streamMsgId });
@@ -1046,18 +1220,6 @@
           self.setState({ isTyping: false });
           setTimeout(scrollToBottom, 30);
         };
-
-        // Build system prompt from OpenAPI schema
-        var systemPrompt = "You are a helpful API assistant. The user is looking at an API documentation page for an OpenAPI-compliant REST API. Here is the full OpenAPI schema/context for this API:\n\n";
-        if (fullSchema) {
-          systemPrompt += buildOpenApiContext(fullSchema);
-        } else {
-          systemPrompt += "No API schema available.";
-        }
-        
-        if (toolSettings.enableTools) {
-          systemPrompt += "\n\nYou have access to the `api_request` tool to execute API calls. When the user asks you to call an endpoint, use the tool instead of just showing a curl command. If a tool call returns an error, you may retry with corrected parameters (up to 3 times).";
-        }
 
         // Build messages array with system prompt
         var messages = [{ role: 'system', content: systemPrompt }].concat(apiMessages);
@@ -1491,7 +1653,9 @@
             React.createElement(
               "div",
               { className: "llm-chat-message-content" },
-              this.formatMessageContent(msg.content, isStreamingThisMessage)
+              msg._errorInfo
+                ? this._renderErrorInChat(msg._errorInfo)
+                : this.formatMessageContent(msg.content, isStreamingThisMessage)
             )
           )
         );
@@ -2207,6 +2371,9 @@
             : s.connectionStatus
         );
 
+        // System Prompt Preset section - for LLM Configuration tab in Settings
+        var systemPromptPresetSelector = createSystemPromptPresetSelector(React);
+
         var bodyContent = React.createElement(
           "div",
           { style: { padding: "16px", background: "var(--theme-panel-bg)" } },
@@ -2215,6 +2382,32 @@
             { style: { marginBottom: "24px", paddingBottom: "20px", borderBottom: "1px solid var(--theme-border-color)" } },
             React.createElement("h3", { style: { color: "var(--theme-text-primary)", fontSize: "14px", fontWeight: "600", marginBottom: "12px" } }, "LLM Configuration"),
             fields
+          ),
+          React.createElement(
+            "div",
+            { style: { marginBottom: "24px", paddingBottom: "20px", borderBottom: "1px solid var(--theme-border-color)" } },
+            React.createElement("h3", { style: { color: "var(--theme-text-primary)", fontSize: "14px", fontWeight: "600", marginBottom: "12px" } }, "System Prompt Preset"),
+            React.createElement("p", { style: { color: "var(--theme-text-secondary)", fontSize: "12px", marginBottom: "12px" } }, 
+              "Select a preset system prompt that defines the assistant's behavior. The 'API Assistant' preset is optimized for REST API documentation."
+            ),
+          React.createElement(systemPromptPresetSelector, {
+            value: s.systemPromptPreset || 'api_assistant',
+            onChange: function(val) {
+              this.setState({ systemPromptPreset: val });
+              var stored = loadFromStorage();
+              stored.systemPromptPreset = val;
+              saveToStorage(stored);
+            }.bind(this),
+            customPrompt: s.customSystemPrompt || '',
+            onCustomChange: function(val) {
+              this.setState({ customSystemPrompt: val });
+              var stored = loadFromStorage();
+              stored.customSystemPrompt = val;
+              saveToStorage(stored);
+            }.bind(this),
+            labelStyle: Object.assign({}, labelStyle, { color: "var(--theme-text-primary)" }),
+            inputStyle: Object.assign({}, inputStyle, { marginBottom: '8px', fontSize: '12px' })
+          })
           ),
           React.createElement(
             "div",
@@ -2411,9 +2604,9 @@
 
   // ── CSS styles for chat bubbles, avatars, and animations (theme-aware) ─────
   var chatStyles = [
-    '.llm-chat-container { display: flex; flex-direction: column; height: 100%; min-height: 0; }',
+    '.llm-chat-container { display: flex; flex-direction: column; height: 100%; min-height: 0; overflow: hidden; }',
     
-    '.llm-chat-messages { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; }',
+    '.llm-chat-messages { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; -webkit-overflow-scrolling: touch; }',
 
     '.llm-chat-message-wrapper { display: flex; width: 100%; margin-bottom: 8px; box-sizing: border-box; }',
 
@@ -2470,7 +2663,7 @@
     '.llm-typing-dot:nth-child(1) { animation-delay: -0.32s; }',
     '.llm-typing-dot:nth-child(2) { animation-delay: -0.16s; }',
 
-    '.llm-chat-input-area { width: 100%; box-sizing: border-box; flex-shrink: 0; }',
+    '.llm-chat-input-area { width: 100%; box-sizing: border-box; flex-shrink: 0; position: sticky; bottom: 0; }',
     
     '.llm-chat-input-area textarea { width: 100%; box-sizing: border-box; overflow-x: hidden; word-wrap: break-word; }',
 

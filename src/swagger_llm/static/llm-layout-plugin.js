@@ -7,9 +7,6 @@
   // Storage key for persisting active tab
   var TAB_STORAGE_KEY = "swagger-llm-active-tab";
   
-  // Store the setActiveTab function globally so other plugins can switch tabs
-  var _setActiveTabFn = null;
-
   window.LLMLayoutPlugin = function (system) {
     var React = system.React;
 
@@ -31,19 +28,10 @@
             setActiveTab(e.newValue);
           }
         };
-        
-        // Also poll for changes (since storage events don't fire in same window)
-        var interval = setInterval(function() {
-          var requestedTab = localStorage.getItem(TAB_STORAGE_KEY);
-          if (requestedTab && requestedTab !== activeTab) {
-            setActiveTab(requestedTab);
-          }
-        }, 500);
-        
+
         window.addEventListener('storage', handleStorageChange);
         return function() {
           window.removeEventListener('storage', handleStorageChange);
-          clearInterval(interval);
         };
       }, [activeTab]);
 

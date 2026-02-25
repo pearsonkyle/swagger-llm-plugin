@@ -10,7 +10,7 @@
     <script>
       (function() {
         try {
-          var themeData = JSON.parse(localStorage.getItem('swagger-llm-theme') || '{"theme":"dark","customColors":{}}');
+          var themeData = JSON.parse(localStorage.getItem('swagger-llm-theme') || '{"theme":"light","customColors":{}}');
           var colors = {
             dark: { primary: '#1d4ed8', background: '#0f172a', textPrimary: '#f7fafc', secondary: '#2d3748', panelBg: '#1f2937', headerBg: '#111827', borderColor: '#4a5568', textSecondary: '#cbd5e0', inputBg: '#1f2937', accent: '#718096', primaryHover: '#1e40af' },
             light: { primary: '#2563eb', background: '#f7fafc', textPrimary: '#1a202c', secondary: '#e2e8f0', panelBg: '#ffffff', headerBg: '#edf2f7', borderColor: '#cbd5e0', textSecondary: '#4a5568', inputBg: '#f7fafc', accent: '#718096', primaryHover: '#1d4ed8' }
@@ -29,6 +29,7 @@
   <body>
     <div id="swagger-ui"></div>
 
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
     <script src="{{ swagger_js_url }}"></script>
     <script src="{{ llm_settings_js_url }}"></script>
     <script src="{{ llm_layout_js_url }}"></script>
@@ -46,12 +47,9 @@
         margin-right: 8px;
         color: #fff;
       }
-      .llm-provider-openai { background-color: #10a37f; }
-      .llm-provider-anthropic { background-color: #d97757; }
       .llm-provider-ollama { background-color: #2b90d8; }
       .llm-provider-lmstudio { background-color: #6366f1; }
       .llm-provider-vllm { background-color: #facc15; color: #1a1a1a; }
-      .llm-provider-azure { background-color: #0078d4; }
     </style>
 
     <script>

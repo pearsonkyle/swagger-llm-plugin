@@ -1,8 +1,9 @@
 """Core plugin logic: functions to mount the custom LLM-enhanced Swagger UI docs."""
 
 import threading
+import weakref
 from pathlib import Path
-from typing import Any, Dict, Optional, Set
+from typing import Optional
 
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
@@ -19,7 +20,7 @@ _TEMPLATES_DIR = _PACKAGE_DIR / "templates"
 _route_lock = threading.Lock()
 
 # Track which apps have LLM docs setup to avoid duplicate routes
-_llm_apps: Set[int] = set()
+_llm_apps: weakref.WeakSet = weakref.WeakSet()
 
 
 def get_swagger_ui_html(
@@ -28,7 +29,7 @@ def get_swagger_ui_html(
     title: str,
     swagger_js_url: str = "https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js",
     swagger_css_url: str = "https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css",
-    theme_css_url: str = "/swagger-llm-static/themes/dark-theme.css",
+    theme_css_url: str = "/swagger-llm-static/themes/light-theme.css",
     llm_settings_js_url: str = "/swagger-llm-static/llm-settings-plugin.js",
     llm_layout_js_url: str = "/swagger-llm-static/llm-layout-plugin.js",
     debug: bool = False,
@@ -76,7 +77,7 @@ def setup_llm_docs(
     openapi_url: Optional[str] = None,
     swagger_js_url: str = "https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js",
     swagger_css_url: str = "https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css",
-    theme_css_url: str = "/swagger-llm-static/themes/dark-theme.css",
+    theme_css_url: str = "/swagger-llm-static/themes/light-theme.css",
     debug: bool = False,
 ) -> None:
     """Mount the LLM-enhanced Swagger UI docs on a FastAPI application.
@@ -102,8 +103,7 @@ def setup_llm_docs(
     # Use thread lock for route modification to avoid race conditions
     with _route_lock:
         # Check if this app already has LLM docs setup to avoid duplicates
-        app_id = id(app)
-        if app_id in _llm_apps:
+        if app in _llm_apps:
             return
 
         # Safely remove any existing docs/redoc routes registered by FastAPI
@@ -119,22 +119,32 @@ def setup_llm_docs(
         if app.redoc_url:
             paths_to_remove.add(app.redoc_url)
             
-        app.router.routes = [
-            r for r in original_routes
-            if not (isinstance(r, Route) and r.path in paths_to_remove)
-        ]
+        # Filter routes more safely to avoid issues with different route types
+        new_routes = []
+        for r in original_routes:
+            if isinstance(r, Route):
+                # Only remove routes with exact path matches
+                if r.path in paths_to_remove:
+                    continue
+            new_routes.append(r)
+        
+        app.router.routes = new_routes
         app.docs_url = None
         app.redoc_url = None
 
         # Mark this app as having LLM docs setup
-        _llm_apps.add(app_id)
+        _llm_apps.add(app)
 
     # Mount static files for the plugin JS (outside lock to avoid blocking)
-    app.mount(
-        "/swagger-llm-static",
-        StaticFiles(directory=str(_STATIC_DIR)),
-        name="swagger-llm-static",
+    already_mounted = any(
+        getattr(r, "name", None) == "swagger-llm-static" for r in app.router.routes
     )
+    if not already_mounted:
+        app.mount(
+            "/swagger-llm-static",
+            StaticFiles(directory=str(_STATIC_DIR)),
+            name="swagger-llm-static",
+        )
 
     # Register the custom docs route
     @app.get(docs_url, include_in_schema=False)
@@ -144,7 +154,7 @@ def setup_llm_docs(
             title=resolved_title,
             swagger_js_url=swagger_js_url,
             swagger_css_url=swagger_css_url,
-            theme_css_url="/swagger-llm-static/themes/dark-theme.css",
+            theme_css_url=theme_css_url,
             llm_settings_js_url="/swagger-llm-static/llm-settings-plugin.js",
             llm_layout_js_url="/swagger-llm-static/llm-layout-plugin.js",
             debug=debug,

@@ -353,8 +353,8 @@ def test_themes_included():
     # Check for theme injection script
     assert "applyLLMTheme" in html or "/swagger-llm-static/themes/" in html
     
-    # Check for theme CSS file reference
-    assert "dark-theme.css" in html
+    # Check for theme CSS file reference (default is light theme)
+    assert "light-theme.css" in html
 
 
 def test_dark_theme_default():

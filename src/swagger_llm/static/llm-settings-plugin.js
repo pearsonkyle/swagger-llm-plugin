@@ -232,6 +232,37 @@
     return lines.join('\n');
   }
 
+  // ── Build curl command from tool call arguments ───────────────────────────
+  function buildCurlCommand(method, path, queryParams, pathParams, body) {
+    var cmd = 'curl -X ' + method.toUpperCase() + ' "' + path + '"';
+    
+    // Add query params to URL if present
+    if (queryParams && Object.keys(queryParams).length > 0) {
+      var queryKeys = Object.keys(queryParams);
+      var qs = queryKeys.map(function(k) {
+        return encodeURIComponent(k) + '=' + encodeURIComponent(queryParams[k]);
+      }).join('&');
+      cmd = 'curl -X ' + method.toUpperCase() + ' "' + path + '?' + qs + '"';
+    }
+    
+    // Add headers
+    cmd += ' \\\n  -H "Content-Type: application/json"';
+    
+    // Add body if present
+    if (body && Object.keys(body).length > 0) {
+      try {
+        var bodyJson = JSON.stringify(body, null, 2);
+        // Escape single quotes in the JSON for safe embedding in curl command
+        bodyJson = bodyJson.replace(/'/g, "'\\''");
+        cmd += ' \\\n  -d \'' + bodyJson + '\'';
+      } catch (e) {
+        cmd += ' \\\n  -d \'{}\'';
+      }
+    }
+    
+    return cmd;
+  }
+
   // ── Build API request tool definition for LLM tool calling ─────────────────
   function buildApiRequestTool(schema) {
     var endpoints = [];
@@ -768,6 +799,7 @@
         this.state = {
           input: "",
           isTyping: false,
+          isProcessingToolCall: false,
           chatHistory: loadChatHistory(),
           schemaLoading: false,
           copiedMessageId: null,
@@ -1501,6 +1533,12 @@
           var toolArgs = msg._toolArgs || {};
           var tcMethod = toolArgs.method || 'GET';
           var tcPath = toolArgs.path || '';
+          var tcQueryParams = toolArgs.query_params || {};
+          var tcPathParams = toolArgs.path_params || {};
+          var tcBody = toolArgs.body || {};
+          
+          // Build curl command
+          var curlCommand = buildCurlCommand(tcMethod, tcPath, tcQueryParams, tcPathParams, tcBody);
           
           return React.createElement(
             "div",
@@ -1533,6 +1571,42 @@
                   React.createElement("span", {
                     style: { fontSize: "13px", fontFamily: "'Consolas', 'Monaco', monospace", color: "var(--theme-text-primary)" }
                   }, tcPath)
+                ),
+                // Curl code block
+                React.createElement(
+                  "pre",
+                  {
+                    style: {
+                      background: "var(--theme-input-bg)",
+                      border: "1px solid var(--theme-border-color)",
+                      borderRadius: "6px",
+                      padding: "8px 10px",
+                      fontSize: "11px",
+                      fontFamily: "'Consolas', 'Monaco', monospace",
+                      maxHeight: "300px",
+                      overflowY: "auto",
+                      whiteSpace: "pre-wrap",
+                      wordBreak: "break-all",
+                      color: "#a5b4fc",
+                      margin: "6px 0 0 0",
+                      lineHeight: "1.4",
+                    }
+                  },
+                  React.createElement(
+                    "div",
+                    { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" } },
+                    React.createElement("span", { style: { color: "var(--theme-text-secondary)", fontSize: "10px" } }, ""),
+                    React.createElement(
+                      "button",
+                      {
+                        className: "llm-copy-btn",
+                        onClick: function() { self.copyToClipboard(curlCommand, msg.messageId); },
+                        title: "Copy curl command",
+                      },
+                      self.state.copiedMessageId === msg.messageId ? "\u2705" : "\uD83D\uDCCB"
+                    )
+                  ),
+                  curlCommand
                 )
               )
             )
@@ -1786,7 +1860,7 @@
             chatHistory.length === 0
               ? React.createElement(
                   "div",
-                  { style: { textAlign: 'center', color: 'var(--theme-text-secondary)', padding: '40px 20px', fontSize: '15px', whiteSpace: 'pre-line' } },
+                  { style: { textAlign: 'center', color: 'var(--theme-text-secondary)', padding: '40px 20px', fontSize: '20px', whiteSpace: 'pre-line' } },
                   "Ask questions about your API!\n\nExamples:\n• What endpoints are available?\n• How do I use the chat completions endpoint?\n• Generate a curl command for /health"
                 )
               : chatHistory.map(this.renderMessage)
@@ -1817,7 +1891,8 @@
                 "button",
                 {
                   onClick: this.clearHistory,
-                  style: { border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: '500', transition: 'all 0.2s ease', background: 'var(--theme-accent)', color: '#fff', padding: '8px 12px' }
+                  disabled: this.state.isTyping || this.state.isProcessingToolCall,
+                  style: { border: 'none', borderRadius: '6px', cursor: (this.state.isTyping || this.state.isProcessingToolCall) ? 'not-allowed' : 'pointer', fontSize: '12px', fontWeight: '500', transition: 'all 0.2s ease', background: (this.state.isTyping || this.state.isProcessingToolCall) ? 'var(--theme-accent)' : 'var(--theme-accent)', opacity: (this.state.isTyping || this.state.isProcessingToolCall) ? 0.6 : 1, color: '#fff', padding: '8px 12px' }
                 },
                 "Clear"
               ),

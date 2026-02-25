@@ -25,31 +25,39 @@ app = FastAPI(
     description="""
 A demonstration of LLM-enhanced API documentation using the [swagger-llm-plugin](https://github.com/pearsonkyle/swagger-llm-plugin).
 
-Use the tabs above to explore the chat interface and settings panel where you can configure your local LLM providers (Ollama, LM Studio, vLLM).
+## Features
+
+- 💬 AI chat assistant with full OpenAPI context
+- 🤖 LLM Settings with local providers (Ollama, LM Studio, vLLM, Custom)
+- 🔗 Tool-calling for API Requests
+- 🎨 Dark/light theme support
+
+## Installation
+
+```bash
+pip install swagger-llm
+```
+
+## Quick Start
+
+```python
+from fastapi import FastAPI
+from swagger_llm import setup_llm_docs
+
+app = FastAPI()
+setup_llm_docs(app)  # Replaces /docs with LLM version
+```
+
+### Example
+
+Use the **Chat** panel to ask questions about these endpoints!
 """,
 )
 
 # Mount the LLM-enhanced Swagger UI (replaces the default /docs)
 setup_llm_docs(app, debug=True)
 
-
-# ── Models ───────────────────────────────────────────────────────────────────
-
-
-class ChatMessage(BaseModel):
-    role: str
-    content: str
-
-
-class ChatRequest(BaseModel):
-    messages: List[ChatMessage]
-    model: str = "gpt-4"
-    max_tokens: int = 100
-    temperature: float = 0.7
-
-
 # ── Endpoints (simple examples) ──────────────────────────────────────────────
-
 
 @app.get("/health", tags=["utility"])
 async def health():

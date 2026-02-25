@@ -6,32 +6,251 @@
 
   // ── LLM Provider configurations ─────────────────────────────────────────────
   var LLM_PROVIDERS = {
-    openai: { name: 'OpenAI', url: 'https://api.openai.com/v1' },
     ollama: { name: 'Ollama', url: 'http://localhost:11434/v1' },
     lmstudio: { name: 'LM Studio', url: 'http://localhost:1234/v1' },
     vllm: { name: 'vLLM', url: 'http://localhost:8000/v1' },
-    azure: { name: 'Azure OpenAI', url: 'https://YOUR_RESOURCE_NAME.openai.azure.com/openai/deployments/YOUR_DEPLOYMENT' },
     custom: { name: 'Custom', url: '' }
   };
+
+  // ── Build OpenAPI context from schema (for system prompt) ──────────────────
+  function buildOpenApiContext(schema) {
+    if (!schema || typeof schema !== 'object') return '';
+    
+    var lines = [];
+    var info = schema.info || {};
+    lines.push('# API Information');
+    lines.push('## ' + (info.title || 'Untitled API'));
+    lines.push('Version: ' + (info.version || 'N/A'));
+    
+    var description = info.description;
+    if (description) {
+      lines.push('');
+      lines.push('### Description');
+      lines.push(description);
+    }
+    
+    var servers = schema.servers || [];
+    if (servers && servers.length > 0) {
+      lines.push('');
+      lines.push('### Base URLs');
+      servers.forEach(function(server) {
+        var url = server.url || '';
+        var desc = server.description || '';
+        if (desc) lines.push('- ' + url + ' (' + desc + ')');
+        else lines.push('- ' + url);
+      });
+    }
+    
+    var paths = schema.paths || {};
+    if (paths && Object.keys(paths).length > 0) {
+      lines.push('');
+      lines.push('# API Endpoints');
+      
+      Object.keys(paths).forEach(function(path) {
+        var pathItem = paths[path];
+        if (typeof pathItem !== 'object') return;
+        
+        lines.push('');
+        lines.push('## `' + path + '`');
+        
+        ['get', 'post', 'put', 'patch', 'delete', 'head', 'options'].forEach(function(method) {
+          if (!pathItem[method] || typeof pathItem[method] !== 'object') return;
+          
+          var operation = pathItem[method];
+          var verb = method.toUpperCase();
+          var summary = operation.summary || '';
+          var desc = operation.description || '';
+          
+          lines.push('### ' + verb);
+          if (summary) {
+            lines.push('**Summary:** ' + summary);
+          }
+          if (desc) {
+            lines.push('**Description:** ' + desc);
+          }
+          
+          var tags = operation.tags || [];
+          if (tags.length > 0) {
+            lines.push('**Tags:** ' + tags.join(', '));
+          }
+          
+          var params = operation.parameters || [];
+          if (params && params.length > 0) {
+            lines.push('');
+            lines.push('**Parameters:**');
+            params.forEach(function(param) {
+              if (typeof param !== 'object') return;
+              var name = param.name || 'unknown';
+              var inLoc = param.in || 'query';
+              var required = param.required ? '[required]' : '[optional]';
+              var pDesc = param.description || '';
+              lines.push('- `' + name + '` (' + inLoc + ', ' + required + ') - ' + pDesc);
+            });
+          }
+          
+          var requestBody = operation.requestBody;
+          if (requestBody && typeof requestBody === 'object') {
+            var content = requestBody.content || {};
+            if (Object.keys(content).length > 0) {
+              lines.push('');
+              lines.push('**Request Body:**');
+              Object.keys(content).forEach(function(contentType) {
+                var mediaType = content[contentType];
+                if (typeof mediaType !== 'object') return;
+                var schemaDef = mediaType.schema || {};
+                if (schemaDef && typeof schemaDef === 'object') {
+                  lines.push('- Content-Type: `' + contentType + '`');
+                  if (schemaDef.type === 'object') {
+                    var props = schemaDef.properties || {};
+                    var propNames = Object.keys(props).slice(0, 5);
+                    lines.push('- Properties: ' + propNames.join(', ') + (Object.keys(props).length > 5 ? '...' : ''));
+                  }
+                }
+              });
+            }
+          }
+          
+          var responses = operation.responses || {};
+          if (responses && Object.keys(responses).length > 0) {
+            lines.push('');
+            lines.push('**Responses:**');
+            Object.keys(responses).sort().forEach(function(statusCode) {
+              var response = responses[statusCode];
+              if (typeof response !== 'object') return;
+              var resDesc = response.description || 'No description';
+              lines.push('- `' + statusCode + '`: ' + resDesc);
+            });
+          }
+        });
+      });
+    }
+    
+    var components = schema.components || {};
+    if (components) {
+      var schemas = components.schemas || {};
+      if (schemas && Object.keys(schemas).length > 0) {
+        lines.push('');
+        lines.push('# Data Models (Schemas)');
+        
+        Object.keys(schemas).slice(0, 20).forEach(function(schemaName) {
+          var schemaDef = schemas[schemaName];
+          if (typeof schemaDef !== 'object') return;
+          
+          lines.push('');
+          lines.push('## `' + schemaName + '`');
+          
+          var desc = schemaDef.description || '';
+          if (desc) lines.push('*' + desc + '*');
+          
+          var props = schemaDef.properties || {};
+          if (props && Object.keys(props).length > 0) {
+            lines.push('');
+            lines.push('**Properties:**');
+            Object.keys(props).slice(0, 10).forEach(function(propName) {
+              var propDef = props[propName];
+              if (typeof propDef !== 'object') return;
+              var ptype = propDef.type || 'any';
+              var preq = propDef.required ? '[required]' : '[optional]';
+              var pdesc = propDef.description || '';
+              lines.push('- `' + propName + '` (' + ptype + ', ' + preq + '): ' + pdesc);
+            });
+          }
+        });
+      }
+    }
+    
+    return lines.join('\n');
+  }
+
+  // ── Build API request tool definition for LLM tool calling ─────────────────
+  function buildApiRequestTool(schema) {
+    var endpoints = [];
+    var methodsEnum = new Set();
+    var paths = schema.paths || {};
+    
+    Object.keys(paths).forEach(function(path) {
+      var pathItem = paths[path];
+      if (typeof pathItem !== 'object') return;
+      
+      ['get', 'post'].forEach(function(method) {
+        if (!pathItem[method] || typeof pathItem[method] !== 'object') return;
+        
+        var op = pathItem[method];
+        var summary = op.summary || '';
+        var desc = method.toUpperCase() + ' ' + path;
+        if (summary) {
+          desc += ' — ' + summary;
+        }
+        endpoints.push(desc);
+        methodsEnum.add(method.toUpperCase());
+      });
+    });
+    
+    if (methodsEnum.size === 0) {
+      methodsEnum = new Set(['GET', 'POST']);
+    }
+    
+    var endpointList = endpoints.length > 0 
+      ? '\n' + endpoints.map(function(e) { return '- ' + e; }).join('\n')
+      : 'No endpoints found.';
+    
+    return {
+      type: 'function',
+      function: {
+        name: 'api_request',
+        description: (
+          'Execute an HTTP request against the API. ' +
+          'Available endpoints:' + endpointList
+        ),
+        parameters: {
+          type: 'object',
+          properties: {
+            method: {
+              type: 'string',
+              enum: Array.from(methodsEnum).sort(),
+              description: 'HTTP method'
+            },
+            path: {
+              type: 'string',
+              description: 'API endpoint path, e.g. /users/{id}'
+            },
+            query_params: {
+              type: 'object',
+              description: 'Query string parameters as key-value pairs',
+              additionalProperties: true
+            },
+            path_params: {
+              type: 'object',
+              description: 'Path parameters to substitute in the URL template',
+              additionalProperties: true
+            },
+            body: {
+              type: 'object',
+              description: 'JSON request body (for POST requests)',
+              additionalProperties: true
+            }
+          },
+          required: ['method', 'path']
+        }
+      }
+    };
+  }
 
   // ── Markdown parser initialization (marked.js) ────────────────────────────
   var marked = null;
   function initMarked() {
     if (marked) return marked;
     
-    // Load marked.js from CDN if not already loaded
     if (typeof window.marked !== 'undefined') {
       marked = window.marked;
       return marked;
     }
     
-    // Create script element to load marked.js
     var script = document.createElement('script');
     script.src = 'https://cdn.jsdelivr.net/npm/marked@9/marked.min.js';
     script.async = true;
     document.head.appendChild(script);
     
-    // Wait for marked to load
     var promise = new Promise(function(resolve) {
       var checkLoaded = function() {
         if (window.marked) {
@@ -51,7 +270,6 @@
   function parseMarkdown(text) {
     if (!text || typeof text !== 'string') return '';
 
-    // Sanitize: strip dangerous tags and attributes
     var sanitized = text
       .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
       .replace(/<iframe[^>]*>[\s\S]*?<\/iframe>/gi, '')
@@ -62,7 +280,6 @@
     try {
       if (marked) {
         var html = marked.parse(sanitized);
-        // Strip event handler attributes and javascript: URLs from parsed output
         html = html
           .replace(/\s+on\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]*)/gi, '')
           .replace(/href\s*=\s*["']javascript:[^"']*["']/gi, 'href="#"')
@@ -73,7 +290,6 @@
       console.error('Markdown parsing error:', e);
     }
 
-    // Fallback: simple line break conversion
     return sanitized.replace(/\n/g, '<br>');
   }
 
@@ -120,7 +336,6 @@
       var raw = localStorage.getItem(THEME_STORAGE_KEY);
       if (raw) {
         var parsed = JSON.parse(raw);
-        // Validate theme is a valid key in THEME_DEFINITIONS
         if (parsed.theme && THEME_DEFINITIONS[parsed.theme]) {
           return parsed;
         }
@@ -128,7 +343,6 @@
     } catch (e) {
       console.warn('Failed to load theme from localStorage:', e);
     }
-    // Return default if invalid or not found
     return { theme: 'dark', customColors: {} };
   }
 
@@ -168,13 +382,12 @@
 
   function saveChatHistory(messages) {
     try {
-      localStorage.setItem(CHAT_HISTORY_KEY, JSON.stringify(messages.slice(-20))); // Keep last 20
+      localStorage.setItem(CHAT_HISTORY_KEY, JSON.stringify(messages.slice(-20)));
     } catch (e) {
       // ignore
     }
   }
 
-  // ── Tool settings persistence ───────────────────────────────────────────────
   function loadToolSettings() {
     try {
       var raw = localStorage.getItem(TOOL_SETTINGS_KEY);
@@ -211,20 +424,18 @@
   var storedSettings = loadFromStorage();
   var storedTheme = loadTheme();
 
-  // ── Apply theme immediately on DOM ready to prevent flash of wrong theme ───
   document.addEventListener('DOMContentLoaded', function() {
-    // Apply the saved/custom theme as soon as DOM is ready
     window.applyLLMTheme(storedTheme.theme, storedTheme.customColors);
   });
 
   var DEFAULT_STATE = {
-    baseUrl: storedSettings.baseUrl || "https://api.openai.com/v1",
+    baseUrl: storedSettings.baseUrl || "http://localhost:11434/v1",
     apiKey: storedSettings.apiKey || "",
-    modelId: storedSettings.modelId || "gpt-4",
+    modelId: storedSettings.modelId || "llama3",
     maxTokens: storedSettings.maxTokens != null ? storedSettings.maxTokens : 4096,
     temperature: storedSettings.temperature != null ? storedSettings.temperature : 0.7,
-    provider: storedSettings.provider || "openai",
-    connectionStatus: "disconnected", // disconnected | connecting | connected | error
+    provider: storedSettings.provider || "ollama",
+    connectionStatus: "disconnected",
     settingsOpen: false,
     chatHistory: loadChatHistory(),
     lastError: "",
@@ -265,7 +476,6 @@
         return Object.assign({}, state, { modelId: action.payload });
       case SET_MAX_TOKENS:
         var val = action.payload;
-        // Only update if it's a valid non-empty number
         if (val === '' || val === null || val === undefined) {
           return state;
         }
@@ -295,9 +505,7 @@
       case SET_SETTINGS_OPEN:
         return Object.assign({}, state, { settingsOpen: action.payload });
       case ADD_CHAT_MESSAGE:
-        // state may be an Immutable Map (Swagger UI wraps reducer state)
         var existingHistory = state.get ? state.get("chatHistory") : state.chatHistory;
-        // Convert Immutable List to plain array if needed
         if (existingHistory && typeof existingHistory.toJS === 'function') {
           existingHistory = existingHistory.toJS();
         }
@@ -313,13 +521,11 @@
         return Object.assign({}, state, { openapiSchema: action.payload });
       case SET_THEME:
         var newTheme = action.payload;
-        // Validate theme
         if (!THEME_DEFINITIONS[newTheme]) {
           console.warn('Invalid theme:', newTheme, 'Using default dark theme');
           newTheme = 'dark';
         }
         var themeDef = THEME_DEFINITIONS[newTheme] || THEME_DEFINITIONS.dark;
-        // Merge custom colors with defaults for this theme
         var mergedColors = Object.assign({}, themeDef, state.customColors || {});
         saveTheme({ theme: newTheme, customColors: mergedColors });
         return Object.assign({}, state, { theme: newTheme, customColors: mergedColors });
@@ -380,7 +586,7 @@
   // ── Provider badge generator ───────────────────────────────────────────────
   function getProviderBadge(providerKey) {
     var provider = LLM_PROVIDERS[providerKey] || LLM_PROVIDERS.custom;
-    var className = 'llm-provider-' + (providerKey === 'custom' ? 'openai' : providerKey);
+    var className = 'llm-provider-' + providerKey;
     return React.createElement(
       "span",
       { className: "llm-provider-badge " + className },
@@ -388,137 +594,9 @@
     );
   }
 
-  // ── OpenAPI schema summary for chat context ────────────────────────────────
-  function getSchemaSummary(schema) {
-    if (!schema || typeof schema !== 'object') return '';
-
-    var lines = [];
-    var info = schema.info || {};
-    lines.push('## API: ' + (info.title || 'Untitled') + ' v' + (info.version || '?'));
-    if (info.description) {
-      lines.push(info.description.substring(0, 500));
-    }
-    lines.push('');
-    lines.push('## Endpoints');
-
-    if (schema.paths) {
-      Object.keys(schema.paths).forEach(function (path) {
-        var methods = schema.paths[path];
-        if (typeof methods !== 'object') return;
-
-        Object.keys(methods).forEach(function (method) {
-          if (method === 'parameters') return; // skip path-level params
-          var spec = methods[method];
-          if (typeof spec !== 'object') return;
-
-          var line = '- ' + method.toUpperCase() + ' ' + path;
-          if (spec.summary) line += ' — ' + spec.summary;
-          lines.push(line);
-
-          // Parameters
-          var params = spec.parameters || [];
-          if (params.length > 0) {
-            var paramDescs = params.map(function (p) {
-              return p.name + ' (' + (p.in || '?') + ', ' + (p.required ? 'required' : 'optional') + ')';
-            });
-            lines.push('  - Params: ' + paramDescs.join(', '));
-          } else {
-            lines.push('  - No parameters');
-          }
-
-          // Request body
-          if (spec.requestBody && spec.requestBody.content) {
-            var contentTypes = Object.keys(spec.requestBody.content);
-            if (contentTypes.length > 0) {
-              var bodySchema = spec.requestBody.content[contentTypes[0]].schema;
-              if (bodySchema && bodySchema.properties) {
-                var props = Object.keys(bodySchema.properties).map(function (k) {
-                  var p = bodySchema.properties[k];
-                  return k + ': ' + (p.type || 'any');
-                });
-                lines.push('  - Body: { ' + props.join(', ') + ' }');
-              }
-            }
-          }
-        });
-      });
-    }
-
-    return lines.join('\n');
-  }
-
-  // ── Check if an endpoint needs X-LLM-* headers ─────────────────────────────
-  function endpointNeedsLLMHeaders(schema, path) {
-    if (!schema || !schema.paths) return false;
-    var pathItem = schema.paths[path];
-    if (!pathItem || typeof pathItem !== 'object') return false;
-
-    var methods = ['get', 'post', 'put', 'patch', 'delete'];
-    for (var i = 0; i < methods.length; i++) {
-      var op = pathItem[methods[i]];
-      if (!op || typeof op !== 'object') continue;
-      var params = op.parameters || [];
-      for (var j = 0; j < params.length; j++) {
-        var p = params[j];
-        if (p && p['in'] === 'header' && typeof p.name === 'string' &&
-            p.name.toLowerCase().startsWith('x-llm-')) {
-          return true;
-        }
-      }
-    }
-    return false;
-  }
-
-  // ── Build a curl command string from tool call args ─────────────────────────
-  function buildCurlFromArgs(args, openapiSchema) {
-    var method = args.method || 'GET';
-    var url = args.path || '/';
-
-    // Substitute path params
-    var pathParams = args.path_params || {};
-    Object.keys(pathParams).forEach(function(key) {
-      url = url.replace('{' + key + '}', encodeURIComponent(pathParams[key]));
-    });
-
-    // Add query params
-    var queryParams = args.query_params || {};
-    var qKeys = Object.keys(queryParams);
-    if (qKeys.length > 0) {
-      var qs = qKeys.map(function(k) {
-        return encodeURIComponent(k) + '=' + encodeURIComponent(queryParams[k]);
-      }).join('&');
-      url += (url.indexOf('?') >= 0 ? '&' : '?') + qs;
-    }
-
-    var fullUrl = (typeof window !== 'undefined' && !url.startsWith('http')) ? window.location.origin + url : url;
-
-    var parts = ['curl'];
-    if (method !== 'GET') parts.push('-X ' + method);
-    parts.push("'" + fullUrl + "'");
-
-    // Add LLM headers only if endpoint needs them
-    var settings = loadFromStorage();
-    if (endpointNeedsLLMHeaders(openapiSchema, args.path || '/')) {
-      if (settings.baseUrl) parts.push("-H 'X-LLM-Base-Url: " + settings.baseUrl + "'");
-      if (settings.apiKey) parts.push("-H 'X-LLM-Api-Key: " + settings.apiKey + "'");
-      if (settings.modelId) parts.push("-H 'X-LLM-Model-Id: " + settings.modelId + "'");
-    }
-
-    var toolSettings = loadToolSettings();
-    if (toolSettings.apiKey) parts.push("-H 'Authorization: Bearer " + toolSettings.apiKey + "'");
-
-    if (method === 'POST' && args.body && Object.keys(args.body).length > 0) {
-      parts.push("-H 'Content-Type: application/json'");
-      parts.push("-d '" + JSON.stringify(args.body) + "'");
-    }
-
-    return parts.join(' \\\n  ');
-  }
-
-  // ── Message ID counter for unique timestamps (fixes timestamp collision issue) ─
+  // ── Message ID counter for unique timestamps ─
   var _messageIdCounter = 0;
 
-  // Generate a unique message ID to prevent timestamp collisions
   function generateMessageId() {
     return Date.now() + '_' + (++_messageIdCounter);
   }
@@ -537,7 +615,6 @@
           schemaLoading: false,
           copiedMessageId: null,
           headerHover: {},
-          // Tool calling state
           pendingToolCall: null,
           editMethod: 'GET',
           editPath: '',
@@ -561,12 +638,9 @@
         this.sendToolResult = this.sendToolResult.bind(this);
         this.renderToolCallPanel = this.renderToolCallPanel.bind(this);
         this._copyTimeoutId = null;
-
         this._fetchAbortController = null;
-        // Store the last assistant message with tool_calls for the agentic loop
         this._lastToolCallAssistantMsg = null;
 
-        // Initialize marked.js
         initMarked();
       }
 
@@ -575,7 +649,6 @@
       }
 
       componentWillUnmount() {
-        // Abort any pending fetch for OpenAPI schema
         if (this._fetchAbortController) {
           this._fetchAbortController.abort();
           this._fetchAbortController = null;
@@ -589,7 +662,6 @@
       fetchOpenApiSchema() {
         var self = this;
         
-        // Abort any existing request
         if (this._fetchAbortController) {
           this._fetchAbortController.abort();
         }
@@ -600,17 +672,14 @@
         fetch("/openapi.json", { signal: self._fetchAbortController.signal })
           .then(function (res) { return res.json(); })
           .then(function (schema) {
-            // Store full schema for use in chat requests
             self._openapiSchema = schema;
             dispatchAction(system, 'setOpenApiSchema', schema);
             
-            // Update localStorage with full schema for persistence
             try {
                 var storedSettings = loadFromStorage();
                 storedSettings.openapiSchema = schema;
                 saveToStorage(storedSettings);
             } catch (e) {
-                // Ignore storage errors
             }
             
             self.setState({ schemaLoading: false });
@@ -626,7 +695,6 @@
       addMessage(msg) {
         this.setState(function (prev) {
           var history = prev.chatHistory || [];
-          // Use the exact message ID to update instead of timestamp (fixes collision)
           if (history.length > 0 && msg.role === 'assistant' && history[history.length - 1].role === 'assistant' && history[history.length - 1].messageId === msg.messageId) {
             var updated = history.slice(0, -1).concat([msg]);
             saveChatHistory(updated);
@@ -658,10 +726,7 @@
       handleExecuteToolCall() {
         var self = this;
         var s = this.state;
-        var toolSettings = loadToolSettings();
-        var settings = loadFromStorage();
 
-        // Build tool args from current edited state (may differ from LLM's original proposal)
         var executedArgs = {
           method: s.editMethod || 'GET',
           path: s.editPath || '',
@@ -672,13 +737,11 @@
           try { executedArgs.body = JSON.parse(s.editBody || '{}'); } catch (e) { executedArgs.body = {}; }
         }
 
-        // Now add the tool call message to chat history with actual executed args
         if (self._pendingToolCallMsg) {
           var toolMsg = Object.assign({}, self._pendingToolCallMsg, {
             _displayContent: 'Tool call: api_request(' + executedArgs.method + ' ' + executedArgs.path + ')',
             _toolArgs: executedArgs
           });
-          // Update the tool_calls arguments to reflect edited params
           if (toolMsg.tool_calls && toolMsg.tool_calls.length > 0) {
             toolMsg.tool_calls = toolMsg.tool_calls.map(function(tc) {
               return Object.assign({}, tc, {
@@ -692,7 +755,6 @@
           self._pendingToolCallMsg = null;
         }
 
-        // Build URL with path param substitution
         var url = s.editPath;
         try {
           var pathParams = JSON.parse(s.editPathParams || '{}');
@@ -701,7 +763,6 @@
           });
         } catch (e) {}
 
-        // Add query params
         try {
           var queryParams = JSON.parse(s.editQueryParams || '{}');
           var queryKeys = Object.keys(queryParams);
@@ -713,19 +774,9 @@
           }
         } catch (e) {}
 
-        // Only forward X-LLM-* headers when the endpoint declares them in its OpenAPI schema
+        // Build headers - only Authorization for tool calls
         var fetchHeaders = {};
-        var openapiSchema = self._openapiSchema || (settings.openapiSchema || null);
-        var needsLLM = endpointNeedsLLMHeaders(openapiSchema, s.editPath);
-        if (needsLLM) {
-          if (settings.baseUrl) fetchHeaders['X-LLM-Base-Url'] = settings.baseUrl;
-          if (settings.apiKey) fetchHeaders['X-LLM-Api-Key'] = settings.apiKey;
-          if (settings.modelId) fetchHeaders['X-LLM-Model-Id'] = settings.modelId;
-          if (settings.maxTokens != null && settings.maxTokens !== '') fetchHeaders['X-LLM-Max-Tokens'] = String(settings.maxTokens);
-          if (settings.temperature != null && settings.temperature !== '') fetchHeaders['X-LLM-Temperature'] = String(settings.temperature);
-        }
-
-        // Only add auth header if a tool API key is explicitly configured
+        var toolSettings = loadToolSettings();
         if (toolSettings.apiKey) {
           fetchHeaders['Authorization'] = 'Bearer ' + toolSettings.apiKey;
         }
@@ -735,9 +786,7 @@
           headers: fetchHeaders,
         };
 
-        // Add body and Content-Type only for POST requests
         if (s.editMethod === 'POST') {
-          fetchHeaders['Content-Type'] = 'application/json';
           try {
             fetchOpts.body = s.editBody;
           } catch (e) {}
@@ -753,7 +802,6 @@
               var responseObj = { status: res.status, statusText: res.statusText, body: text };
               console.log('[Tool Call Response]', res.status, res.statusText, text.substring(0, 500));
               self.setState({ toolCallResponse: responseObj });
-              // Auto-send result back to LLM
               self.sendToolResult(responseObj);
             });
           })
@@ -769,7 +817,6 @@
         var self = this;
         var s = this.state;
 
-        // Check retry limit
         if (s.toolRetryCount >= 3) {
           var lastError = 'Status ' + responseObj.status + ' ' + (responseObj.statusText || '');
           var lastBody = (responseObj.body || '').substring(0, 500);
@@ -786,11 +833,9 @@
 
         var toolCallId = s.pendingToolCall ? s.pendingToolCall.id : 'call_unknown';
 
-        // Truncate response body to 4000 chars
         var truncatedBody = (responseObj.body || '').substring(0, 4000);
         var resultContent = 'Status: ' + responseObj.status + ' ' + (responseObj.statusText || '') + '\n\n' + truncatedBody;
 
-        // Build the tool result message
         var toolResultMsg = {
           role: 'tool',
           content: resultContent,
@@ -799,11 +844,7 @@
           _displayContent: 'Tool result: Status ' + responseObj.status
         };
 
-        // Build API messages from current state PLUS the tool result we're about to add.
-        // We can't rely on setState having applied yet, so we construct the list explicitly.
         var currentHistory = (self.state.chatHistory || []).slice();
-        // The last message in history should be the assistant tool_calls message
-        // (added when the tool call was detected). Append the tool result after it.
         currentHistory.push(toolResultMsg);
 
         var apiMessages = currentHistory.map(function(m) {
@@ -815,7 +856,6 @@
           return msg;
         });
 
-        // Now add to UI state
         self.addMessage(toolResultMsg);
 
         var streamMsgId = generateMessageId();
@@ -839,7 +879,6 @@
         var errorMsg = err.message || "Request failed";
         var details = "";
         
-        // Try to extract details from response
         try {
           if (responseText) {
             var parsed = JSON.parse(responseText);
@@ -847,16 +886,13 @@
             else if (parsed.error) details = parsed.error;
           }
         } catch (e) {
-          // Not JSON, might be HTML or plain text
           if (responseText && responseText.length < 500) {
             details = responseText;
           }
         }
 
-        // Check for specific error patterns
         var lowerError = (errorMsg + ' ' + details).toLowerCase();
         
-        // Network/connection errors
         if (lowerError.includes('connection refused') || 
             lowerError.includes('connect timeout') ||
             lowerError.includes('network') ||
@@ -871,7 +907,6 @@
           };
         }
         
-        // Authentication errors (401, 403, invalid API key)
         if (lowerError.includes('401') || 
             lowerError.includes('403') || 
             lowerError.includes('unauthorized') ||
@@ -886,7 +921,6 @@
           };
         }
         
-        // Not found errors (404, model not found)
         if (lowerError.includes('404') || 
             lowerError.includes('not found') ||
             lowerError.includes('model')) {
@@ -898,7 +932,6 @@
           };
         }
         
-        // Rate limiting
         if (lowerError.includes('429') || 
             lowerError.includes('rate limit') ||
             lowerError.includes('too many requests')) {
@@ -910,7 +943,6 @@
           };
         }
         
-        // Timeout errors
         if (lowerError.includes('timeout') || 
             lowerError.includes('timed out')) {
           return {
@@ -921,7 +953,6 @@
           };
         }
         
-        // Server errors (5xx)
         if (lowerError.includes('500') || 
             lowerError.includes('502') || 
             lowerError.includes('503') ||
@@ -935,18 +966,16 @@
           };
         }
         
-        // CORS errors
         if (lowerError.includes('cors') || 
             lowerError.includes('access-control')) {
           return {
             title: "CORS Error",
-            message: "Cross-origin request blocked. This is usually a configuration issue with the LLM provider.",
+            message: "Cross-origin request blocked. This is usually a configuration issue with the LLM provider. Ensure your LLM server has CORS enabled.",
             action: null,
             needsSettings: false
           };
         }
         
-        // Generic error - still provide helpful guidance
         return {
           title: "Request Failed",
           message: details || errorMsg,
@@ -955,7 +984,6 @@
         };
       }
 
-      // ── Render error message in chat ────────────────────────────────────────
       _renderErrorInChat(errorInfo) {
         var self = this;
         var errorHtml = '<div class="llm-error-message">';
@@ -974,7 +1002,7 @@
         return errorHtml;
       }
 
-      // ── Shared streaming helper ─────────────────────────────────────────────
+      // ── Direct LLM streaming helper (no server proxy) ───────────────────────
       _streamLLMResponse(apiMessages, streamMsgId, fullSchema) {
         var self = this;
         var settings = loadFromStorage();
@@ -985,7 +1013,6 @@
           if (el) el.scrollTop = el.scrollHeight;
         };
 
-        // Add empty assistant message immediately so it persists in chatHistory
         self.addMessage({ role: 'assistant', content: '', messageId: streamMsgId });
 
         self._currentCancelToken = new AbortController();
@@ -994,19 +1021,15 @@
         var accumulated = "";
         var currentStreamMessageId = streamMsgId;
         
-        // Track response for error handling
         var lastResponseText = "";
 
-        // Tool calls accumulator
         var accumulatedToolCalls = {};
 
         var finalize = function(content, saveContent, isError) {
           if (saveContent && content && content.trim() && content !== "*(cancelled)*") {
-            // Check if this looks like an error message
             var isErrorMsg = isError || (content && content.toLowerCase().startsWith('error:'));
             
             if (isErrorMsg) {
-              // Parse error and create user-friendly message
               var errorInfo = self._getErrorMessage({ message: content }, lastResponseText);
               var errorHtml = self._renderErrorInChat(errorInfo);
               self.addMessage({ 
@@ -1024,31 +1047,56 @@
           setTimeout(scrollToBottom, 30);
         };
 
-        // Build request body
-        var requestBody = {
-          messages: apiMessages,
-          openapi_schema: fullSchema,
-        };
+        // Build system prompt from OpenAPI schema
+        var systemPrompt = "You are a helpful API assistant. The user is looking at an API documentation page for an OpenAPI-compliant REST API. Here is the full OpenAPI schema/context for this API:\n\n";
+        if (fullSchema) {
+          systemPrompt += buildOpenApiContext(fullSchema);
+        } else {
+          systemPrompt += "No API schema available.";
+        }
+        
         if (toolSettings.enableTools) {
-          requestBody.enable_tools = true;
+          systemPrompt += "\n\nYou have access to the `api_request` tool to execute API calls. When the user asks you to call an endpoint, use the tool instead of just showing a curl command. If a tool call returns an error, you may retry with corrected parameters (up to 3 times).";
         }
 
-        fetch("/llm-chat", {
+        // Build messages array with system prompt
+        var messages = [{ role: 'system', content: systemPrompt }].concat(apiMessages);
+
+        // Build tools definition if enabled
+        var payload = {
+          messages: messages,
+          model: settings.modelId || "llama3",
+          max_tokens: settings.maxTokens != null && settings.maxTokens !== '' ? parseInt(settings.maxTokens) : 4096,
+          temperature: settings.temperature != null && settings.temperature !== '' ? parseFloat(settings.temperature) : 0.7,
+          stream: true,
+        };
+
+        if (toolSettings.enableTools && fullSchema) {
+          payload.tools = [buildApiRequestTool(fullSchema)];
+          payload.tool_choice = "auto";
+        }
+
+        // Build headers
+        var fetchHeaders = {
+          "Content-Type": "application/json",
+        };
+        if (settings.apiKey) {
+          fetchHeaders["Authorization"] = "Bearer " + settings.apiKey;
+        }
+
+        var baseUrl = (settings.baseUrl || "").replace(/\/+$/, "");
+        
+        fetch(baseUrl + "/chat/completions", {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-LLM-Base-Url": settings.baseUrl || "",
-            "X-LLM-Api-Key": settings.apiKey || "",
-            "X-LLM-Model-Id": settings.modelId || "",
-            "X-LLM-Max-Tokens": (settings.maxTokens != null && settings.maxTokens !== '') ? String(settings.maxTokens) : "",
-            "X-LLM-Temperature": (settings.temperature != null && settings.temperature !== '') ? String(settings.temperature) : "",
-          },
-          body: JSON.stringify(requestBody),
+          headers: fetchHeaders,
+          body: JSON.stringify(payload),
           signal: self._currentCancelToken.signal
         })
           .then(function (res) {
             if (!res.ok) {
-              throw new Error("HTTP " + res.status + ": " + res.statusText);
+              return res.text().then(function(text) {
+                throw new Error("HTTP " + res.status + ": " + res.statusText + (text ? " - " + text : ""));
+              });
             }
             var reader = res.body.getReader();
             var decoder = new TextDecoder();
@@ -1072,15 +1120,15 @@
                 for (var i = 0; i < lines.length; i++) {
                   var line = lines[i].trim();
                   if (!line || !line.startsWith("data: ")) continue;
-                  var payload = line.substring(6);
+                  var payloadData = line.substring(6);
 
-                  if (payload === "[DONE]") {
+                  if (payloadData === "[DONE]") {
                     finalize(accumulated || "Sorry, I couldn't get a response.", true);
                     return;
                   }
 
                   try {
-                    var chunk = JSON.parse(payload);
+                    var chunk = JSON.parse(payloadData);
                     if (chunk.error) {
                       finalize("Error: " + chunk.error + (chunk.details ? ": " + chunk.details : ""), true, true);
                       return;
@@ -1089,7 +1137,6 @@
                     var choice = chunk.choices && chunk.choices[0];
                     if (!choice) continue;
 
-                    // Accumulate content deltas
                     if (choice.delta && choice.delta.content) {
                       accumulated += choice.delta.content;
                       self.setState(function (prev) {
@@ -1109,7 +1156,6 @@
                       scrollToBottom();
                     }
 
-                    // Accumulate tool_calls deltas
                     if (choice.delta && choice.delta.tool_calls) {
                       choice.delta.tool_calls.forEach(function(tc) {
                         var idx = tc.index != null ? tc.index : 0;
@@ -1124,14 +1170,13 @@
                       });
                     }
 
-                    // Detect tool_calls finish
                     if (choice.finish_reason === "tool_calls") {
                       var toolCallsList = Object.keys(accumulatedToolCalls).map(function(k) {
                         return accumulatedToolCalls[k];
                       });
 
                       if (toolCallsList.length > 0) {
-                        var tc = toolCallsList[0]; // Handle first tool call
+                        var tc = toolCallsList[0];
                         var args = {};
                         try {
                           args = JSON.parse(tc.function.arguments || '{}');
@@ -1139,7 +1184,6 @@
                           args = {};
                         }
 
-                        // Store the assistant message with tool_calls for later (added on Execute)
                         var assistantToolMsg = {
                           role: 'assistant',
                           content: null,
@@ -1151,7 +1195,6 @@
                         self._lastToolCallAssistantMsg = assistantToolMsg;
                         self._pendingToolCallMsg = assistantToolMsg;
 
-                        // Remove the empty streaming placeholder from chat history
                         self.setState(function(prev) {
                           var history = (prev.chatHistory || []).filter(function(m) {
                             return m.messageId !== streamMsgId;
@@ -1160,7 +1203,6 @@
                           return { chatHistory: history };
                         });
 
-                        // Populate tool call panel
                         self.setState({
                           isTyping: false,
                           pendingToolCall: tc,
@@ -1173,15 +1215,13 @@
                         });
                         self._currentCancelToken = null;
 
-                        // Auto-execute if enabled
                         if (toolSettings.autoExecute) {
                           setTimeout(function() { self.handleExecuteToolCall(); }, 100);
                         }
-                        return; // Don't continue processing
+                        return;
                       }
                     }
                   } catch (e) {
-                    // skip unparseable chunks
                   }
                 }
 
@@ -1195,7 +1235,6 @@
             if (err.name === 'AbortError') {
               finalize(accumulated, true);
             } else {
-              // Mark as error to trigger user-friendly error display
               finalize("Error: " + (err.message || "Request failed"), true, true);
             }
           });
@@ -1211,11 +1250,9 @@
         var msgId = generateMessageId();
         var streamMsgId = generateMessageId();
 
-        // Clear input
         self._pendingToolCallMsg = null;
         self.setState({ input: "", pendingToolCall: null, toolCallResponse: null, toolRetryCount: 0 });
 
-        // Build API messages from current history + new user message
         var userMsg = { role: 'user', content: userInput, messageId: msgId };
         var currentHistory = self.state.chatHistory || [];
         var apiMessages = currentHistory.concat([userMsg]).map(function (m) {
@@ -1223,7 +1260,6 @@
           if (m.content != null) msg.content = m.content;
           if (m.tool_calls) msg.tool_calls = m.tool_calls;
           if (m.tool_call_id) msg.tool_call_id = m.tool_call_id;
-          // Ensure content exists for regular messages
           if (!m.tool_calls && msg.content == null) msg.content = m._displayContent || '';
           return msg;
         });
@@ -1288,23 +1324,17 @@
         var isTool = msg.role === 'tool';
         var isToolCallMsg = msg.role === 'assistant' && msg.tool_calls && msg.tool_calls.length > 0;
 
-        // Check if this is the last assistant message and we're currently typing
         var chatHistory = self.state.chatHistory || [];
         var isStreamingThisMessage = self.state.isTyping &&
           !isUser &&
           idx === chatHistory.length - 1 &&
           msg.role === 'assistant';
 
-        // Tool call message (assistant with tool_calls, no content)
         if (isToolCallMsg) {
           var toolArgs = msg._toolArgs || {};
           var tcMethod = toolArgs.method || 'GET';
           var tcPath = toolArgs.path || '';
-          var openapiSchema = null;
-          try { var stored = loadFromStorage(); openapiSchema = stored.openapiSchema || null; } catch (e) {}
-          var curlForMsg = buildCurlFromArgs(toolArgs, openapiSchema);
-          var curlCopyId = 'tc_curl_' + (msg.messageId || idx);
-
+          
           return React.createElement(
             "div",
             { key: msg.messageId || msg.timestamp, className: "llm-chat-message-wrapper" },
@@ -1318,7 +1348,6 @@
               React.createElement(
                 "div",
                 { style: { flex: 1, minWidth: 0 } },
-                // Header with method badge
                 React.createElement(
                   "div",
                   { style: { display: "flex", alignItems: "center", gap: "8px", marginBottom: "6px" } },
@@ -1337,89 +1366,26 @@
                   React.createElement("span", {
                     style: { fontSize: "13px", fontFamily: "'Consolas', 'Monaco', monospace", color: "var(--theme-text-primary)" }
                   }, tcPath)
-                ),
-                // Curl command block
-                React.createElement(
-                  "div",
-                  { style: { position: "relative" } },
-                  React.createElement(
-                    "pre",
-                    {
-                      style: {
-                        background: "var(--theme-input-bg)",
-                        border: "1px solid var(--theme-border-color)",
-                        borderRadius: "6px",
-                        padding: "8px 10px",
-                        fontSize: "11px",
-                        fontFamily: "'Consolas', 'Monaco', monospace",
-                        color: "var(--theme-text-primary)",
-                        whiteSpace: "pre-wrap",
-                        wordBreak: "break-all",
-                        margin: 0,
-                        lineHeight: "1.4",
-                        maxHeight: "120px",
-                        overflowY: "auto",
-                      }
-                    },
-                    curlForMsg
-                  ),
-                  React.createElement(
-                    "button",
-                    {
-                      onClick: function() { self.copyToClipboard(curlForMsg, curlCopyId); },
-                      title: "Copy curl command",
-                      style: {
-                        position: "absolute",
-                        top: "4px",
-                        right: "4px",
-                        background: "var(--theme-secondary)",
-                        border: "1px solid var(--theme-border-color)",
-                        borderRadius: "4px",
-                        color: "var(--theme-text-secondary)",
-                        padding: "2px 6px",
-                        cursor: "pointer",
-                        fontSize: "10px",
-                        transition: "all 0.15s ease",
-                      }
-                    },
-                    self.state.copiedMessageId === curlCopyId ? "\u2705" : "\uD83D\uDCCB curl"
-                  )
-                ),
-                // Params summary if any non-trivial params
-                (toolArgs.query_params && Object.keys(toolArgs.query_params).length > 0) ||
-                (toolArgs.body && Object.keys(toolArgs.body).length > 0)
-                  ? React.createElement("div", { style: { marginTop: "4px", fontSize: "11px", color: "var(--theme-text-secondary)" } },
-                      toolArgs.query_params && Object.keys(toolArgs.query_params).length > 0
-                        ? React.createElement("span", null, "Query: " + JSON.stringify(toolArgs.query_params) + "  ")
-                        : null,
-                      toolArgs.body && Object.keys(toolArgs.body).length > 0
-                        ? React.createElement("span", null, "Body: " + JSON.stringify(toolArgs.body))
-                        : null
-                    )
-                  : null
+                )
               )
             )
           );
         }
 
-        // Tool result message — show status and response body inline
         if (isTool) {
           var statusLine = msg._displayContent || 'Tool result';
-          // Parse out the response body from content (format: "Status: NNN ...\n\n<body>")
           var responseBody = '';
           var statusColor = '#10b981';
           if (msg.content) {
             var parts = msg.content.split('\n\n');
             var statusPart = parts[0] || '';
             responseBody = parts.slice(1).join('\n\n');
-            // Extract status code for coloring
             var statusMatch = statusPart.match(/Status:\s*(\d+)/);
             if (statusMatch) {
               var code = parseInt(statusMatch[1]);
               statusColor = (code >= 200 && code < 300) ? '#10b981' : '#f87171';
             }
           }
-          // Try to pretty-print JSON
           var formattedBody = responseBody;
           try {
             var parsed = JSON.parse(responseBody);
@@ -1452,7 +1418,7 @@
                       className: "llm-copy-btn",
                       onClick: function() { self.copyToClipboard(responseBody, msg.messageId); },
                       title: "Copy response",
-                      style: Object.assign({}, styles.copyMessageBtn, { opacity: 1 })
+                      style: { opacity: 1 }
                     },
                     self.state.copiedMessageId === msg.messageId ? "\u2705" : "\uD83D\uDCCB"
                   )
@@ -1517,9 +1483,7 @@
                   className: "llm-copy-btn",
                   onClick: function() { self.copyToClipboard(msg.content, msg.messageId); },
                   title: "Copy message",
-                  style: Object.assign({}, styles.copyMessageBtn, {
-                    opacity: (self.state.headerHover[msg.messageId || msg.timestamp] || self.state.copiedMessageId === msg.messageId) && !isStreamingThisMessage ? 1 : 0
-                  })
+                  style: { opacity: (self.state.headerHover[msg.messageId || msg.timestamp] || self.state.copiedMessageId === msg.messageId) && !isStreamingThisMessage ? 1 : 0 }
                 },
                 self.state.copiedMessageId === msg.messageId ? "\u2705" : "\uD83D\uDCCB"
               )
@@ -1536,7 +1500,6 @@
       formatMessageContent(content, isStreaming) {
         var React = system.React;
         
-        // If content is empty and we're streaming, show a "streaming..." indicator
         if (!content || !content.trim()) {
           if (isStreaming) {
             return React.createElement("span", { 
@@ -1547,79 +1510,13 @@
           return null;
         }
         
-        // Parse Markdown
         var html = parseMarkdown(content);
         
         return React.createElement("div", {
           className: "llm-chat-message-text",
-          style: styles.chatMessageContent,
+          style: { fontSize: '15px', lineHeight: '1.6', wordWrap: 'break-word', overflowWrap: 'break-word' },
           dangerouslySetInnerHTML: { __html: html }
         });
-      }
-
-      _buildCurlCommand() {
-        var s = this.state;
-        var toolSettings = loadToolSettings();
-        var settings = loadFromStorage();
-
-        // Build the resolved URL
-        var url = s.editPath;
-        try {
-          var pathParams = JSON.parse(s.editPathParams || '{}');
-          Object.keys(pathParams).forEach(function(key) {
-            url = url.replace('{' + key + '}', encodeURIComponent(pathParams[key]));
-          });
-        } catch (e) {}
-
-        try {
-          var queryParams = JSON.parse(s.editQueryParams || '{}');
-          var queryKeys = Object.keys(queryParams);
-          if (queryKeys.length > 0) {
-            var qs = queryKeys.map(function(k) {
-              return encodeURIComponent(k) + '=' + encodeURIComponent(queryParams[k]);
-            }).join('&');
-            url += (url.indexOf('?') >= 0 ? '&' : '?') + qs;
-          }
-        } catch (e) {}
-
-        // Use current origin for relative paths
-        var fullUrl = url.startsWith('http') ? url : window.location.origin + url;
-
-        var parts = ['curl'];
-        if (s.editMethod !== 'GET') {
-          parts.push('-X ' + s.editMethod);
-        }
-        parts.push("'" + fullUrl + "'");
-
-        // Only include X-LLM-* headers when the endpoint declares them
-        var openapiSchema = settings.openapiSchema || null;
-        if (endpointNeedsLLMHeaders(openapiSchema, s.editPath)) {
-          if (settings.baseUrl) parts.push("-H 'X-LLM-Base-Url: " + settings.baseUrl + "'");
-          if (settings.apiKey) parts.push("-H 'X-LLM-Api-Key: " + settings.apiKey + "'");
-          if (settings.modelId) parts.push("-H 'X-LLM-Model-Id: " + settings.modelId + "'");
-          if (settings.maxTokens != null && settings.maxTokens !== '') parts.push("-H 'X-LLM-Max-Tokens: " + settings.maxTokens + "'");
-          if (settings.temperature != null && settings.temperature !== '') parts.push("-H 'X-LLM-Temperature: " + settings.temperature + "'");
-        }
-
-        if (toolSettings.apiKey) {
-          parts.push("-H 'Authorization: Bearer " + toolSettings.apiKey + "'");
-        }
-
-        if (s.editMethod === 'POST') {
-          parts.push("-H 'Content-Type: application/json'");
-          try {
-            var body = JSON.parse(s.editBody || '{}');
-            if (Object.keys(body).length > 0) {
-              parts.push("-d '" + JSON.stringify(body) + "'");
-            }
-          } catch (e) {
-            if (s.editBody && s.editBody.trim()) {
-              parts.push("-d '" + s.editBody.trim() + "'");
-            }
-          }
-        }
-
-        return parts.join(' \\\n  ');
       }
 
       renderToolCallPanel() {
@@ -1648,23 +1545,10 @@
         };
         var labelStyle = { color: "var(--theme-text-secondary)", fontSize: "11px", marginBottom: "2px" };
         var headerStyle = { color: "var(--theme-text-primary)", fontSize: "13px", fontWeight: "600", marginBottom: "6px", display: "flex", alignItems: "center", gap: "6px", justifyContent: "space-between" };
-        var smallBtnStyle = {
-          background: "transparent",
-          border: "1px solid var(--theme-border-color)",
-          borderRadius: "4px",
-          color: "var(--theme-text-secondary)",
-          padding: "3px 8px",
-          cursor: "pointer",
-          fontSize: "11px",
-          transition: "all 0.15s ease",
-        };
-
-        var curlCmd = self._buildCurlCommand();
 
         return React.createElement(
           "div",
           { style: panelStyle },
-          // Header
           React.createElement("div", { style: headerStyle },
             React.createElement("div", { style: { display: "flex", alignItems: "center", gap: "6px" } },
               "\uD83D\uDD27 ",
@@ -1672,67 +1556,8 @@
               React.createElement("span", { style: { color: "var(--theme-text-secondary)", fontWeight: "400", fontSize: "12px" } },
                 s.editMethod + " " + s.editPath
               )
-            ),
-            React.createElement(
-              "div",
-              { style: { display: "flex", gap: "4px" } },
-              React.createElement(
-                "button",
-                {
-                  onClick: function() {
-                    navigator.clipboard.writeText(curlCmd).then(function() {
-                      self.setState({ _curlCopied: true });
-                      setTimeout(function() { self.setState({ _curlCopied: false }); }, 1500);
-                    });
-                  },
-                  style: Object.assign({}, smallBtnStyle, s._curlCopied ? { color: "#10b981", borderColor: "#10b981" } : {}),
-                  title: "Copy as curl"
-                },
-                s._curlCopied ? "\u2705" : "\uD83D\uDCCB curl"
-              ),
-              React.createElement(
-                "button",
-                {
-                  onClick: function() {
-                    var params = { method: s.editMethod, path: s.editPath };
-                    try { var qp = JSON.parse(s.editQueryParams || '{}'); if (Object.keys(qp).length > 0) params.query_params = qp; } catch (e) {}
-                    try { var pp = JSON.parse(s.editPathParams || '{}'); if (Object.keys(pp).length > 0) params.path_params = pp; } catch (e) {}
-                    if (s.editMethod === 'POST') { try { params.body = JSON.parse(s.editBody || '{}'); } catch (e) { params.body = s.editBody; } }
-                    navigator.clipboard.writeText(JSON.stringify(params, null, 2)).then(function() {
-                      self.setState({ _jsonCopied: true });
-                      setTimeout(function() { self.setState({ _jsonCopied: false }); }, 1500);
-                    });
-                  },
-                  style: Object.assign({}, smallBtnStyle, s._jsonCopied ? { color: "#10b981", borderColor: "#10b981" } : {}),
-                  title: "Copy as JSON"
-                },
-                s._jsonCopied ? "\u2705" : "\uD83D\uDCCB JSON"
-              )
             )
           ),
-          // Curl preview
-          React.createElement(
-            "pre",
-            {
-              style: {
-                background: "var(--theme-input-bg)",
-                border: "1px solid var(--theme-border-color)",
-                borderRadius: "6px",
-                padding: "8px 10px",
-                fontSize: "11px",
-                fontFamily: "'Consolas', 'Monaco', monospace",
-                color: "var(--theme-text-primary)",
-                whiteSpace: "pre-wrap",
-                wordBreak: "break-all",
-                margin: "0 0 8px 0",
-                lineHeight: "1.4",
-                maxHeight: "120px",
-                overflowY: "auto",
-              }
-            },
-            curlCmd
-          ),
-          // Compact editable fields
           React.createElement("div", { style: { display: "flex", gap: "6px", marginBottom: "8px", alignItems: "flex-end" } },
             React.createElement(
               "div",
@@ -1756,7 +1581,6 @@
               React.createElement("input", { type: "text", value: s.editQueryParams, onChange: function(e) { self.setState({ editQueryParams: e.target.value }); }, style: inputStyle, placeholder: '{}' })
             )
           ),
-          // Body for POST
           s.editMethod === 'POST' && React.createElement("div", { style: { marginBottom: "8px" } },
             React.createElement("div", { style: Object.assign({}, labelStyle, { display: "flex", alignItems: "center", justifyContent: "space-between" }) }, 
               "Body",
@@ -1764,7 +1588,6 @@
             ),
             React.createElement("textarea", { value: s.editBody, onChange: function(e) { self.setState({ editBody: e.target.value }); }, style: Object.assign({}, inputStyle, { resize: "vertical", minHeight: "72px" }), rows: 4, placeholder: '{}' })
           ),
-          // Buttons
           React.createElement(
             "div",
             { style: { display: "flex", gap: "8px" } },
@@ -1787,14 +1610,14 @@
 
         return React.createElement(
           "div",
-          { className: "llm-chat-container", style: styles.chatContainer },
+          { className: "llm-chat-container", style: { display: 'flex', flexDirection: 'column', height: 'calc(100vh - 90px)', minHeight: '300px' } },
           React.createElement(
             "div",
-            { id: "llm-chat-messages", style: styles.chatMessages },
+            { id: "llm-chat-messages", style: { flex: 1, overflowY: 'auto', padding: '12px', display: 'flex', flexDirection: 'column', gap: '12px', scrollBehavior: 'smooth' } },
             chatHistory.length === 0
               ? React.createElement(
                   "div",
-                  { style: styles.emptyChat },
+                  { style: { textAlign: 'center', color: 'var(--theme-text-secondary)', padding: '40px 20px', fontSize: '15px', whiteSpace: 'pre-line' } },
                   "Ask questions about your API!\n\nExamples:\n• What endpoints are available?\n• How do I use the chat completions endpoint?\n• Generate a curl command for /health"
                 )
               : chatHistory.map(this.renderMessage)
@@ -1802,49 +1625,43 @@
           this.state.isTyping
             ? React.createElement(
                 "div",
-                { style: { padding: "8px 12px", color: "var(--theme-text-secondary)", fontSize: "12px" } },
+                { style: { padding: '8px 12px', color: 'var(--theme-text-secondary)', fontSize: '12px' } },
                 this.renderTypingIndicator()
               )
             : null,
-          // Tool call panel rendered inline in chat messages (see renderMessage)
-          // Show pending tool call panel below messages if waiting for user action
           this.state.pendingToolCall && !this.state.isTyping ? this.renderToolCallPanel() : null,
           React.createElement(
             "div",
-            { className: "llm-chat-input-area", style: styles.chatInputArea },
+            { className: "llm-chat-input-area", style: { borderTop: '1px solid var(--theme-border-color)', padding: '12px', width: '100%', maxWidth: '100%', boxSizing: 'border-box', flexShrink: 0 } },
             React.createElement("textarea", {
               value: this.state.input,
               onChange: this.handleInputChange,
               onKeyDown: this.handleKeyDown,
               placeholder: "Ask about your API... (Shift+Enter for new line)",
-              style: styles.chatInput,
+              style: { width: '100%', background: 'var(--theme-input-bg)', border: '1px solid var(--theme-border-color)', borderRadius: '4px', color: 'var(--theme-text-primary)', padding: '10px 12px', fontSize: '14px', resize: 'vertical', fontFamily: "'Inter', sans-serif", minHeight: '44px', maxHeight: '200px', overflowWrap: 'break-word', wordWrap: 'break-word', overflowX: 'hidden', boxSizing: 'border-box', lineHeight: '1.5' },
               rows: 2
             }),
             React.createElement(
               "div",
-              { style: styles.chatControls },
-              // Clear button - separate from send/cancel group
+              { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px' } },
               React.createElement(
                 "button",
                 {
                   onClick: this.clearHistory,
-                  style: Object.assign({}, styles.chatButton, styles.chatButtonSecondary),
-                  title: "Clear chat history"
+                  style: { border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: '500', transition: 'all 0.2s ease', background: 'var(--theme-accent)', color: '#fff', padding: '8px 12px' }
                 },
                 "Clear"
               ),
-              // Send/Cancel button group
               React.createElement(
                 "div",
-                { style: { display: "flex", gap: "8px" } },
+                { style: { display: 'flex', gap: '8px' } },
                 this.state.isTyping && React.createElement(
                   "button",
                   {
                     onClick: function() { 
                       if (self._currentCancelToken) self._currentCancelToken.abort(); 
                     },
-                    style: Object.assign({}, styles.chatButton, styles.chatButtonDanger),
-                    title: "Cancel streaming response"
+                    style: { border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: '500', background: '#dc2626', color: '#fff', padding: '8px 16px' }
                   },
                 "❌ Cancel"
               ),
@@ -1853,10 +1670,7 @@
                 {
                   onClick: this.handleSend,
                   disabled: !this.state.input.trim() || this.state.isTyping,
-                  style: Object.assign({}, styles.chatButton, styles.chatButtonPrimary, {
-                    opacity: (!this.state.input.trim() || this.state.isTyping) ? 0.6 : 1,
-                    cursor: (!this.state.input.trim() || this.state.isTyping) ? "not-allowed" : "pointer"
-                  })
+                  style: { border: 'none', borderRadius: '6px', cursor: (!this.state.input.trim() || this.state.isTyping) ? 'not-allowed' : 'pointer', fontSize: '12px', fontWeight: '500', transition: 'all 0.2s ease', background: (!this.state.input.trim() || this.state.isTyping) ? 'var(--theme-primary)' : 'var(--theme-primary)', opacity: (!this.state.input.trim() || this.state.isTyping) ? 0.6 : 1, color: '#fff', padding: '8px 16px' }
                 },
                 this.state.isTyping ? "..." : "Send"
               )
@@ -1875,7 +1689,6 @@
     return class LLMSettingsPanel extends React.Component {
       constructor(props) {
         super(props);
-        // Initialize with safe defaults from stored settings
         var s = loadFromStorage();
         var ts = loadToolSettings();
         this.state = {
@@ -1890,14 +1703,11 @@
           connectionStatus: "disconnected",
           settingsOpen: false,
           lastError: "",
-          // Available models from connection test
           availableModels: [],
-          // Tool calling settings
           enableTools: ts.enableTools || false,
           autoExecute: ts.autoExecute || false,
           toolApiKey: ts.apiKey || '',
         };
-        // Create debounced save function for auto-save
         this._debouncedSave = debounce(this._saveSettings.bind(this), 300);
         this.handleTestConnection = this.handleTestConnection.bind(this);
         this.toggleOpen = this.toggleOpen.bind(this);
@@ -1910,7 +1720,6 @@
         this.handleThemeChange = this.handleThemeChange.bind(this);
       }
 
-      // Internal save method - called by debounced wrapper
       _saveSettings() {
         var settings = {
           baseUrl: this.state.baseUrl,
@@ -1929,28 +1738,23 @@
         saveTheme({ theme: this.state.theme, customColors: this.state.customColors });
       }
 
-      // Auto-save method - called by field change handlers
       _autoSave() {
         this._debouncedSave();
       }
 
       componentDidMount() {
-        // Reload theme from localStorage to ensure we have the latest values
         var stored = loadTheme();
-        // Update state with validated theme from localStorage
         this.setState({ 
           theme: stored.theme || DEFAULT_STATE.theme, 
           customColors: stored.customColors || {} 
         });
         
-        // Apply theme using requestAnimationFrame to ensure DOM is ready
         requestAnimationFrame(function() {
           window.applyLLMTheme(stored.theme || DEFAULT_STATE.theme, stored.customColors);
         });
       }
 
       componentDidUpdate(prevProps, prevState) {
-        // Apply theme when theme or colors change
         if (prevState.theme !== this.state.theme || prevState.customColors !== this.state.customColors) {
           window.applyLLMTheme(this.state.theme, this.state.customColors);
         }
@@ -1966,15 +1770,12 @@
           provider: this.state.provider,
         };
         saveToStorage(settings);
-        // Save tool calling settings
         saveToolSettings({
           enableTools: this.state.enableTools,
           autoExecute: this.state.autoExecute,
           apiKey: this.state.toolApiKey,
         });
-        // Also ensure current theme is persisted to localStorage
         saveTheme({ theme: this.state.theme, customColors: this.state.customColors });
-        // Don't change connection status, just save
       }
 
       handleTestConnection() {
@@ -1983,40 +1784,35 @@
           baseUrl: this.state.baseUrl,
           apiKey: this.state.apiKey,
           modelId: this.state.modelId,
-          maxTokens: this.state.maxTokens !== '' ? this.state.maxTokens : null,
-          temperature: this.state.temperature !== '' ? this.state.temperature : null,
-          provider: this.state.provider,
         };
-        // Update localStorage with current state values (for test)
         saveToStorage(settings);
         self.setState({ connectionStatus: "connecting", lastError: "" });
         dispatchAction(system, 'setConnectionStatus', "connecting");
 
-        // Route through backend proxy to avoid CORS (new /llm/models endpoint)
-        fetch("/llm/models", {
+        // Build headers
+        var headers = { "Content-Type": "application/json" };
+        if (settings.apiKey) {
+          headers["Authorization"] = "Bearer " + settings.apiKey;
+        }
+
+        var baseUrl = (settings.baseUrl || "").replace(/\/+$/, "");
+        
+        fetch(baseUrl + "/models", {
           method: 'GET',
-          headers: {
-            "Content-Type": "application/json",
-            // Only include non-empty header values
-            "X-LLM-Base-Url": settings.baseUrl || "",
-            "X-LLM-Api-Key": settings.apiKey || "",
-            "X-LLM-Model-Id": settings.modelId || "",
-          }
+          headers: headers
         })
           .then(function (res) {
             if (!res.ok) {
-              return res.json().catch(function() { 
-                throw new Error('HTTP ' + res.status + ': ' + res.statusText); 
+              return res.text().then(function(text) { 
+                throw new Error('HTTP ' + res.status + ': ' + res.statusText + (text ? " - " + text : "")); 
               });
             }
             return res.json();
           })
           .then(function (data) {
-            // Check if response has error field
             if (data && data.error) {
               throw new Error(data.details || data.error);
             }
-            // Extract model IDs from response
             var models = [];
             if (data && Array.isArray(data.data)) {
               models = data.data
@@ -2025,7 +1821,6 @@
                 .sort();
             }
             var newState = { connectionStatus: "connected", availableModels: models };
-            // Auto-select first model if current modelId is not in the list
             if (models.length > 0 && models.indexOf(self.state.modelId) === -1) {
               newState.modelId = models[0];
               dispatchAction(system, 'setModelId', models[0]);
@@ -2102,19 +1897,16 @@
         this._autoSave();
       }
 
-      // Handler for enableTools checkbox
       handleEnableToolsChange(e) {
         this.setState({ enableTools: e.target.checked });
         this._autoSave();
       }
 
-      // Handler for autoExecute checkbox
       handleAutoExecuteChange(e) {
         this.setState({ autoExecute: e.target.checked });
         this._autoSave();
       }
 
-      // Handler for tool API key input
       handleToolApiKeyChange(e) {
         this.setState({ toolApiKey: e.target.value });
         this._autoSave();
@@ -2128,7 +1920,6 @@
         var statusEmoji = STATUS_EMOJI[s.connectionStatus] || "⚪";
         var provider = LLM_PROVIDERS[s.provider] || LLM_PROVIDERS.custom;
 
-        // Input styling (theme-aware)
         var inputStyle = {
           background: "var(--theme-input-bg)",
           border: "1px solid var(--theme-border-color)",
@@ -2143,7 +1934,6 @@
         var labelStyle = { color: "var(--theme-text-secondary)", fontSize: "12px", marginBottom: "4px", display: "block" };
         var fieldStyle = { marginBottom: "12px" };
 
-        // Provider preset dropdown
         var providerOptions = Object.keys(LLM_PROVIDERS).map(function (key) {
           return React.createElement(
             "option",
@@ -2152,7 +1942,6 @@
           );
         });
 
-        // Provider selection field
         var providerField = React.createElement(
           "div",
           { style: fieldStyle },
@@ -2168,14 +1957,12 @@
           )
         );
 
-        // Provider badge (no inline color overrides — CSS classes handle colors)
         var providerBadge = React.createElement(
           "span",
           { className: "llm-provider-badge llm-provider-" + (s.provider === 'custom' ? 'openai' : s.provider), style: { fontSize: "10px", padding: "2px 8px", borderRadius: "10px", marginLeft: "8px" } },
           provider.name
         );
 
-        // Base URL field
         var baseUrlField = React.createElement(
           "div",
           { style: fieldStyle },
@@ -2258,7 +2045,6 @@
           )
         );
 
-        // Theme settings fields
         var themeConfig = React.createElement(
           "div",
           { style: fieldStyle },
@@ -2280,7 +2066,6 @@
           )
         );
 
-        // Color picker fields
         var colorFields = React.createElement(
           "div",
           { style: { display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "12px" } },
@@ -2319,7 +2104,6 @@
           )
         );
 
-        // Tool calling settings
         var checkboxStyle = { marginRight: "8px", cursor: "pointer" };
         var checkboxLabelStyle = { color: "var(--theme-text-primary)", fontSize: "13px", cursor: "pointer", display: "flex", alignItems: "center" };
         var toolCallSettings = React.createElement(
@@ -2423,7 +2207,6 @@
             : s.connectionStatus
         );
 
-        // When used as a tab, render the full panel without collapsible header
         var bodyContent = React.createElement(
           "div",
           { style: { padding: "16px", background: "var(--theme-panel-bg)" } },
@@ -2473,7 +2256,7 @@
     };
   }
 
-  // ── CSS styles object (uses CSS variables for theme support) ────────────────
+  // ── CSS styles object ────────────────────────────────────────────────────────
   var styles = {
     chatContainer: {
       display: "flex",
@@ -2549,7 +2332,6 @@
       alignItems: "center",
       marginTop: "8px",
     },
-    // Chat button styles - unified for consistency
     chatButton: {
       border: "none",
       borderRadius: "6px",
@@ -2582,7 +2364,6 @@
     chatButtonSecondaryHover: {
       background: "#64748b",
     },
-    // Deprecated - kept for compatibility
     smallButton: {
       background: "var(--theme-accent)",
       color: "#fff",
@@ -2610,14 +2391,12 @@
     },
   };
 
-  // ── CSS injection helper with guard to prevent duplicates ─────────────────
+  // ── CSS injection helper ───────────────────────────────────────────────────
   function injectStyles(id, css) {
     if (typeof document === 'undefined') return;
     
-    // Check for existing style element
     var existing = document.getElementById(id);
     if (existing) {
-      // Update content if different
       if (existing.textContent !== css) {
         existing.textContent = css;
       }
@@ -2632,45 +2411,35 @@
 
   // ── CSS styles for chat bubbles, avatars, and animations (theme-aware) ─────
   var chatStyles = [
-    // Chat container - full width with proper flex layout
     '.llm-chat-container { display: flex; flex-direction: column; height: 100%; min-height: 0; }',
     
-    // Chat messages area - flexible height with overflow handling
     '.llm-chat-messages { flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; }',
 
-    // Chat message wrapper styles
     '.llm-chat-message-wrapper { display: flex; width: 100%; margin-bottom: 8px; box-sizing: border-box; }',
 
-    // Message bubble styles
     '.llm-chat-message { padding: 10px 14px; border-radius: 12px; max-width: 85%; position: relative; box-sizing: border-box; word-wrap: break-word; overflow-wrap: break-word; }',
     '.llm-chat-message.user { align-self: flex-end; background: var(--theme-primary); color: white; }',
     '.llm-chat-message.assistant { align-self: flex-start; background: var(--theme-secondary); color: var(--theme-text-primary); }',
 
-    // Avatar styles
     '.llm-avatar { width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 18px; margin-right: 8px; flex-shrink: 0; }',
     '.assistant-avatar { background: linear-gradient(135deg, #6366f1, #8b5cf6); }',
     '.llm-chat-message.assistant .llm-avatar { margin-right: 8px; }',
 
-    // Message header (user/assistant label + time)
     '.llm-chat-message-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; font-size: 11px; opacity: 0.9; flex-shrink: 0; }',
     '.llm-user-label { font-weight: 600; color: var(--theme-text-primary); }',
     '.llm-assistant-label { font-weight: 600; color: #8b5cf6; }',
     '.llm-chat-message-time { opacity: 0.7; font-size: 10px; }',
 
-    // Copy button on messages
     '.llm-copy-btn { background: transparent; border: none; color: var(--theme-text-secondary); font-size: 14px; cursor: pointer; padding: 2px 6px; border-radius: 4px; transition: all 0.2s ease; margin-left: 8px; }',
     '.llm-copy-btn:hover { background: var(--theme-accent); color: white; transform: scale(1.1); }',
 
-    // Chat message text
     '.llm-chat-message-text { font-size: 15px; line-height: 1.6; word-wrap: break-word; overflow-wrap: break-word; }',
     '.llm-chat-message-text p { margin: 8px 0; }',
     '.llm-chat-message-text p:first-child { margin-top: 4px; }',
     '.llm-chat-message-text p:last-child { margin-bottom: 4px; }',
 
-    // Streaming placeholder indicator
     '.llm-streaming-indicator { color: var(--theme-accent); font-style: italic; opacity: 0.7; font-size: 13px; margin-top: 8px; }',
 
-    // Markdown content in messages
     '.llm-chat-message-text strong { color: var(--theme-text-primary); }',
     '.llm-chat-message-text em { font-style: italic; }',
     '.llm-chat-message-text ul { margin: 8px 0; padding-left: 24px; }',
@@ -2680,50 +2449,41 @@
     '.llm-chat-message-text a { color: #60a5fa; text-decoration: none; }',
     '.llm-chat-message-text a:hover { text-decoration: underline; }',
 
-    // Code blocks in messages
     '.llm-chat-message-text pre { background: var(--theme-input-bg); border-radius: 8px; padding: 12px; overflow-x: auto; margin: 10px 0; font-family: "Consolas", "Monaco", monospace; font-size: 14px; position: relative; max-width: 100%; box-sizing: border-box; word-break: break-all; }',
     '.llm-chat-message-text code { font-family: "Consolas", "Monaco", monospace; background: rgba(0,0,0,0.15); padding: 2px 6px; border-radius: 4px; font-size: 13px; }',
     '.llm-chat-message-text pre code { background: transparent; padding: 0; }',
 
-    // Code block header with copy button
     '.code-block-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; padding-bottom: 8px; border-bottom: 1px solid var(--theme-border-color); }',
     '.code-block-label { color: var(--theme-text-secondary); font-size: 12px; font-weight: 600; }',
     '.code-block-copy { background: var(--theme-secondary); border: none; color: var(--theme-text-primary); padding: 6px 12px; border-radius: 4px; cursor: pointer; font-size: 11px; transition: all 0.2s; }',
     '.code-block-copy:hover { background: var(--theme-accent); color: white; }',
     '.code-block-copy.copied { background: #10b981 !important; color: white; }',
 
-    // Scrollbar styling
     '#llm-chat-messages::-webkit-scrollbar { width: 8px; }',
     '#llm-chat-messages::-webkit-scrollbar-track { background: var(--theme-panel-bg); border-radius: 4px; }',
     '#llm-chat-messages::-webkit-scrollbar-thumb { background: var(--theme-secondary); border-radius: 4px; }',
     '#llm-chat-messages::-webkit-scrollbar-thumb:hover { background: var(--theme-accent); }',
 
-    // Typing indicator animation
     '@keyframes typing { 0%, 80%, 100% { transform: scale(0); } 40% { transform: scale(1); } }',
     '.llm-typing-indicator { display: inline-flex; align-items: center; gap: 4px; padding: 8px 12px; background: var(--theme-secondary); border-radius: 18px; font-size: 14px; margin-bottom: 8px; }',
     '.llm-typing-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--theme-text-secondary); animation: typing 1.4s infinite ease-in-out both; }',
     '.llm-typing-dot:nth-child(1) { animation-delay: -0.32s; }',
     '.llm-typing-dot:nth-child(2) { animation-delay: -0.16s; }',
 
-    // Chat input area - full width
     '.llm-chat-input-area { width: 100%; box-sizing: border-box; flex-shrink: 0; }',
     
-    // Chat input - proper text handling
     '.llm-chat-input-area textarea { width: 100%; box-sizing: border-box; overflow-x: hidden; word-wrap: break-word; }',
 
-    // Tablet responsive (768px - 1024px)
     '@media (min-width: 769px) and (max-width: 1024px) {',
     '  .llm-chat-message { max-width: 80%; }',
     '  .llm-chat-messages { padding: 10px; }',
     '}',
 
-    // Large desktop (above 1200px)
     '@media (min-width: 1200px) {',
     '  .llm-chat-container { max-width: 100%; }',
     '  .llm-chat-message { max-width: 75%; }',
     '}',
 
-    // Mobile responsive styles (up to 768px)
     '@media (max-width: 768px) {',
     '  .llm-chat-message-wrapper { width: 100%; padding: 0 4px; margin-bottom: 6px; }',
     '  .llm-chat-message { max-width: 90%; padding: 8px 10px; }',
@@ -2735,12 +2495,10 @@
     '  .llm-chat-message-text pre { font-size: 12px; padding: 8px; }',
     '}',
 
-    // Mobile landscape - adjust height for browser chrome
     '@media (max-width: 768px) and (orientation: landscape) {',
     '  .llm-chat-container { height: calc(100dvh - 40px) !important; }',
     '}',
 
-    // Error message styles
     '.llm-error-message {',
     '  background: linear-gradient(135deg, rgba(239, 68, 68, 0.15), rgba(220, 38, 38, 0.1));',
     '  border: 1px solid rgba(239, 68, 68, 0.3);',
@@ -2784,7 +2542,6 @@
     '}',
   ].join('\n');
   
-  // Inject chat styles into document
   injectStyles('swagger-llm-chat-styles', chatStyles);
 
   // ── Plugin definition ───────────────────────────────────────────────────────
@@ -2806,14 +2563,11 @@
 
   // ── Theme injection function ────────────────────────────────────────────────
   window.applyLLMTheme = function (themeName, customColors) {
-    // Validate theme name
     var validatedTheme = THEME_DEFINITIONS[themeName] ? themeName : 'dark';
     var themeDef = THEME_DEFINITIONS[validatedTheme];
 
-    // Merge custom colors with theme defaults
     var finalColors = Object.assign({}, themeDef, customColors);
 
-    // Build CSS variables string
     var cssVars = [
       '--theme-primary: ' + finalColors.primary,
       '--theme-primary-hover: ' + (finalColors.primaryHover || finalColors.primary),
@@ -2826,19 +2580,12 @@
       '--theme-text-primary: ' + finalColors.textPrimary,
       '--theme-text-secondary: ' + (finalColors.textSecondary || '#6b7280'),
       '--theme-input-bg: ' + (finalColors.inputBg || finalColors.secondary),
-      '--theme-provider-openai: #10a37f',
-      '--theme-provider-anthropic: #d97757',
-      '--theme-provider-ollama: #2b90d8',
-      '--theme-provider-vllm: #facc15',
-      '--theme-provider-azure: #0078d4',
     ].join('; ');
 
-    // Update existing theme style element or create new one using helper
     var css = ':root { ' + cssVars + ' }';
     var themeStyle = document.getElementById('swagger-llm-theme-styles');
     
     if (themeStyle) {
-      // Only update if content is different to avoid unnecessary reflows
       if (themeStyle.textContent !== css) {
         themeStyle.textContent = css;
       }
@@ -2851,7 +2598,6 @@
   };
 
   // ── Global function to open settings tab ───────────────────────────────────
-  // Called by error messages in chat when user needs to adjust settings
   window.llmOpenSettings = function() {
     try {
       localStorage.setItem("swagger-llm-active-tab", "settings");

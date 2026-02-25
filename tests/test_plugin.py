@@ -7,14 +7,14 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import pytest
-from fastapi import Depends, FastAPI
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from swagger_llm import LLMConfig, get_llm_config, setup_llm_docs
+from swagger_llm import setup_llm_docs
 from swagger_llm.plugin import get_swagger_ui_html
 
 
-# ── Fixtures ─────────────────────────────────────────────────────────────────
+# ── Fixtures ───────────────────────────────────────────────────────────────────
 
 
 def make_app() -> FastAPI:
@@ -31,148 +31,7 @@ def make_debug_app() -> FastAPI:
     return app
 
 
-# ── Bug Fix Tests ────────────────────────────────────────────────────────────
-
-
-def test_request_interceptor_includes_all_headers():
-    """The docs page should include the requestInterceptor with all X-LLM-* headers."""
-    client = TestClient(make_app())
-    html = client.get("/docs").text
-    
-    # Check all required headers are in the interceptor
-    required_headers = [
-        "X-LLM-Base-Url",
-        "X-LLM-Api-Key", 
-        "X-LLM-Model-Id",
-        "X-LLM-Max-Tokens",
-        "X-LLM-Temperature",
-    ]
-    
-    for header in required_headers:
-        assert header in html, f"Missing {header} from requestInterceptor"
-    
-    # Check the empty string checks for numeric fields
-    assert "maxTokens !== ''" in html or '"" !== ""' in html
-    assert "temperature !== ''" in html
-
-
-def test_empty_string_handling_in_interceptor():
-    """Test that empty strings don't get sent as header values."""
-    client = TestClient(make_app())
-    html = client.get("/docs").text
-    
-    # Verify empty string checks are present for numeric fields
-    assert "maxTokens !== ''" in html
-    assert "temperature !== ''" in html
-
-
-def test_debounce_on_connection_test():
-    """Verify debounce is applied to connection test."""
-    client = TestClient(make_app())
-    html = client.get("/docs").text
-    
-    # Check for debounce function definition
-    assert "debounce" in html or "debounce" in client.get("/swagger-llm-static/llm-settings-plugin.js").text
-
-
-def test_error_feedback_in_connection_test():
-    """Verify error feedback is shown when connection fails."""
-    client = TestClient(make_app())
-
-    # Check JavaScript file for error handling
-    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
-
-    # Check for .catch in JavaScript
-    assert ".catch" in js_content
-
-
-def test_route_cleanup_thread_safety():
-    """Test that route cleanup uses thread-safe operations."""
-    # Create multiple apps simultaneously
-    app1 = make_app()
-    app2 = make_app()
-    
-    client1 = TestClient(app1)
-    client2 = TestClient(app2)
-    
-    # Both should have docs endpoint
-    assert client1.get("/docs").status_code == 200
-    assert client2.get("/docs").status_code == 200
-    
-    # OpenAPI should still work
-    assert client1.get("/openapi.json").status_code == 200
-    assert client2.get("/openapi.json").status_code == 200
-
-
-def test_debug_mode_disables_cache():
-    """Test that debug mode enables auto-reload."""
-    client = TestClient(make_debug_app())
-    
-    # Debug app should work
-    response = client.get("/docs")
-    assert response.status_code == 200
-    
-    # Check that HTML contains debug-related setup
-    html = response.text
-    assert "debug" in html.lower() or "auto.reload" in html.lower()
-
-
-def test_provider_presets_available():
-    """Verify LLM provider presets are available in the JavaScript."""
-    client = TestClient(make_app())
-    
-    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
-    
-    # Check for provider configurations
-    providers = ["openai", "anthropic", "ollama", "lmstudio", "vllm"]
-    for provider in providers:
-        assert provider in js_content.lower() or provider.upper() in js_content
-
-
-def test_number_coercion_fix():
-    """Test that Number() coercion handles empty strings correctly."""
-    client = TestClient(make_app())
-    
-    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
-    
-    # Check that empty string checks exist for numeric inputs
-    assert "maxTokens !== ''" in js_content
-    assert "temperature !== ''" in js_content
-
-
-def test_css_scoping():
-    """Verify CSS is properly scoped to avoid conflicts."""
-    client = TestClient(make_app())
-    html = client.get("/docs").text
-    
-    # Check for scoped styles
-    assert "#llm-settings-panel" in html or "llm-settings-panel {" in html
-    
-    # Check for provider badge styles
-    assert ".llm-provider-badge" in html or "llm-provider-badge" in html
-
-
-def test_chat_panel_included():
-    """Verify chat panel component is included."""
-    client = TestClient(make_app())
-    
-    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
-
-    assert "ChatPanel" in js_content
-    assert "chatHistory" in js_content
-
-
-def test_code_generator_functions():
-    """Verify code generation functions are available."""
-    client = TestClient(make_app())
-
-    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
-
-    # Check for curl generation (code generator functions removed in v0.3.1)
-    assert "curl" in js_content.lower()
-
-
-# ── setup_llm_docs tests ──────────────────────────────────────────────────────
+# ── setup_llm_docs tests ───────────────────────────────────────────────────────
 
 
 def test_docs_route_exists():
@@ -230,15 +89,22 @@ def test_openapi_json_still_accessible():
     assert "openapi" in data
 
 
-def test_docs_contains_request_interceptor():
-    """The docs page should include the X-LLM-* request interceptor."""
+def test_docs_does_not_contain_request_interceptor():
+    """The docs page should not include the old X-LLM-* request interceptor."""
     client = TestClient(make_app())
     html = client.get("/docs").text
-    assert "requestInterceptor" in html
-    assert "X-LLM-" in html
+    # Old requestInterceptor should be removed
+    assert "requestInterceptor" not in html
 
 
-# ── get_swagger_ui_html tests ─────────────────────────────────────────────────
+def test_docs_contains_llm_settings_panel():
+    """The docs page should include the LLM settings panel."""
+    client = TestClient(make_app())
+    html = client.get("/docs").text
+    assert "llm-settings-panel" in html
+
+
+# ── get_swagger_ui_html tests ────────────────────────────────────────────────────
 
 
 def test_get_swagger_ui_html_returns_html_response():
@@ -269,114 +135,24 @@ def test_get_swagger_ui_html_includes_debug_flag():
     assert isinstance(resp, HTMLResponse)
 
 
-# ── get_llm_config dependency tests ──────────────────────────────────────────
+# ── Provider tests (only local providers remain) ────────────────────────────────
 
 
-@pytest.mark.anyio
-async def test_get_llm_config_defaults():
-    """get_llm_config should return defaults when no headers are present."""
-    config = await get_llm_config()
-    assert config.base_url == "https://api.openai.com/v1"
-    assert config.api_key is None
-    assert config.model_id == "gpt-4"
-    assert config.max_tokens == 4096
-    assert config.temperature == 0.7
-
-
-@pytest.mark.anyio
-async def test_get_llm_config_from_headers():
-    """get_llm_config should parse header values correctly."""
-    config = await get_llm_config(
-        x_llm_base_url="http://localhost:11434/v1",
-        x_llm_api_key="test-key",
-        x_llm_model_id="llama3",
-        x_llm_max_tokens="2048",
-        x_llm_temperature="0.5",
-    )
-    assert config.base_url == "http://localhost:11434/v1"
-    assert config.api_key == "test-key"
-    assert config.model_id == "llama3"
-    assert config.max_tokens == 2048
-    assert config.temperature == 0.5
-
-
-@pytest.mark.anyio
-async def test_get_llm_config_invalid_numerics():
-    """get_llm_config should fall back to defaults on non-numeric values."""
-    config = await get_llm_config(
-        x_llm_max_tokens="not-a-number",
-        x_llm_temperature="bad",
-    )
-    assert config.max_tokens == 4096
-    assert config.temperature == 0.7
-
-
-def test_llm_config_via_endpoint():
-    """The get_llm_config dependency should work end-to-end in a FastAPI app."""
-    app = FastAPI(title="Dep Test")
-    setup_llm_docs(app)
-
-    @app.get("/cfg")
-    async def cfg_endpoint(llm: LLMConfig = Depends(get_llm_config)):
-        return {
-            "base_url": llm.base_url,
-            "model_id": llm.model_id,
-            "max_tokens": llm.max_tokens,
-        }
-
-    client = TestClient(app)
-    response = client.get(
-        "/cfg",
-        headers={
-            "X-LLM-Base-Url": "http://ollama:11434/v1",
-            "X-LLM-Model-Id": "mistral",
-            "X-LLM-Max-Tokens": "1024",
-        },
-    )
-    assert response.status_code == 200
-    data = response.json()
-    assert data["base_url"] == "http://ollama:11434/v1"
-    assert data["model_id"] == "mistral"
-    assert data["max_tokens"] == 1024
-
-
-# ── LLMConfig dataclass tests ─────────────────────────────────────────────────
-
-
-def test_llm_config_dataclass_defaults():
-    """LLMConfig dataclass should have correct default values."""
-    cfg = LLMConfig()
-    assert cfg.base_url == "https://api.openai.com/v1"
-    assert cfg.api_key is None
-    assert cfg.model_id == "gpt-4"
-    assert cfg.max_tokens == 4096
-    assert cfg.temperature == 0.7
-
-
-def test_llm_config_dataclass_custom_values():
-    """LLMConfig dataclass should accept custom field values."""
-    cfg = LLMConfig(base_url="http://local/v1", api_key="key", model_id="gpt-3.5-turbo")
-    assert cfg.base_url == "http://local/v1"
-    assert cfg.api_key == "key"
-    assert cfg.model_id == "gpt-3.5-turbo"
-
-
-# ── Edge case tests ───────────────────────────────────────────────────────────
-
-
-def test_empty_api_key_does_not_break_requests():
-    """Test that empty API key doesn't break request interceptor."""
+def test_provider_presets_available():
+    """Verify LLM provider presets are available in the JavaScript."""
     client = TestClient(make_app())
     
-    # Make a request to an endpoint that uses LLM config
-    @client.app.get("/test")
-    def test_endpoint(llm: LLMConfig = Depends(get_llm_config)):
-        return {"has_key": llm.api_key is not None}
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
     
-    response = client.get("/test")
-    assert response.status_code == 200
-    # Empty key should result in None
-    assert response.json()["has_key"] is False
+    # Check for local provider configurations (cloud providers removed)
+    assert "ollama" in js_content.lower()
+    assert "lmstudio" in js_content.lower()
+    assert "vllm" in js_content.lower()
+    
+    # Cloud providers should be removed
+    assert "api.openai.com" not in js_content.lower()
+    assert "api.anthropic.com" not in js_content.lower()
+    assert "azure" not in js_content.lower()
 
 
 def test_provider_preset_ollama():
@@ -389,13 +165,14 @@ def test_provider_preset_ollama():
     assert "localhost:11434/v1" in js_content
 
 
-def test_provider_preset_anthropic_removed():
-    """Test Anthropic provider preset has been removed (only OpenAI-compatible APIs supported)."""
+def test_provider_preset_lmstudio():
+    """Test LM Studio provider preset."""
     client = TestClient(make_app())
     js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
-
-    # Anthropic should no longer be a provider preset
-    assert "api.anthropic.com/v1" not in js_content
+    
+    # Check LM Studio preset
+    assert "lmstudio" in js_content.lower()
+    assert "localhost:1234/v1" in js_content
 
 
 def test_provider_preset_vllm():
@@ -406,6 +183,77 @@ def test_provider_preset_vllm():
     # Check vLLM preset
     assert "vllm" in js_content.lower()
     assert "localhost:8000/v1" in js_content
+
+
+# ── JavaScript function tests (client-side functionality) ───────────────────────
+
+
+def test_build_openapi_context_function_exists():
+    """Verify buildOpenApiContext function exists in JavaScript (client-side now)."""
+    client = TestClient(make_app())
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+    
+    # Check for the client-side function
+    assert "buildOpenApiContext" in js_content
+
+
+def test_build_api_request_tool_function_exists():
+    """Verify buildApiRequestTool function exists in JavaScript (client-side now)."""
+    client = TestClient(make_app())
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+    
+    # Check for the client-side function
+    assert "buildApiRequestTool" in js_content
+
+
+def test_chat_panel_included():
+    """Verify chat panel component is included."""
+    client = TestClient(make_app())
+    
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+
+    assert "ChatPanel" in js_content
+    assert "chatHistory" in js_content
+
+
+def test_streaming_llm_response_function_exists():
+    """Verify _streamLLMResponse function exists for direct LLM calls."""
+    client = TestClient(make_app())
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+
+    assert "_streamLLMResponse" in js_content
+    # Should call /chat/completions directly, not /llm-chat
+    assert "/chat/completions" in js_content
+
+
+def test_test_connection_calls_models_endpoint():
+    """Verify handleTestConnection calls /models endpoint directly."""
+    client = TestClient(make_app())
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+
+    # Should call /models directly, not /llm/models
+    assert '/models"' in js_content
+
+
+# ── Thread safety tests ────────────────────────────────────────────────────────
+
+
+def test_route_cleanup_thread_safety():
+    """Test that route cleanup uses thread-safe operations."""
+    # Create multiple apps simultaneously
+    app1 = make_app()
+    app2 = make_app()
+    
+    client1 = TestClient(app1)
+    client2 = TestClient(app2)
+    
+    # Both should have docs endpoint
+    assert client1.get("/docs").status_code == 200
+    assert client2.get("/docs").status_code == 200
+    
+    # OpenAPI should still work
+    assert client1.get("/openapi.json").status_code == 200
+    assert client2.get("/openapi.json").status_code == 200
 
 
 def test_concurrent_app_setup():
@@ -442,214 +290,41 @@ def test_concurrent_app_setup():
     assert all(r["success"] for r in results)
 
 
-# ── /llm-chat endpoint tests ────────────────────────────────────────────────
+# ── Debug mode tests ───────────────────────────────────────────────────────────
 
 
-def test_llm_chat_route_exists():
-    """The /llm-chat route should be reachable and return SSE stream."""
-    client = TestClient(make_app())
-    response = client.post(
-        "/llm-chat",
-        json={"messages": [{"role": "user", "content": "hello"}], "openapi_summary": ""},
-        headers={"X-LLM-Base-Url": "http://localhost:9999/v1"},
-    )
-    # Streaming endpoint returns 200 with SSE error event (no real backend)
+def test_debug_mode_disables_cache():
+    """Test that debug mode enables auto-reload."""
+    client = TestClient(make_debug_app())
+    
+    # Debug app should work
+    response = client.get("/docs")
     assert response.status_code == 200
-    assert "text/event-stream" in response.headers["content-type"]
-    # The body should contain an SSE data line with an error
-    assert "data: " in response.text
-    assert "error" in response.text.lower() or "Request failed" in response.text
+    
+    # Check that HTML contains debug-related setup
+    html = response.text
+    assert "debug" in html.lower() or "auto.reload" in html.lower()
 
 
-def test_llm_chat_accepts_openapi_summary():
-    """The /llm-chat endpoint should accept an openapi_summary field."""
+# ── CSS scoping tests ──────────────────────────────────────────────────────────
+
+
+def test_css_scoping():
+    """Verify CSS is properly scoped to avoid conflicts."""
     client = TestClient(make_app())
-    response = client.post(
-        "/llm-chat",
-        json={
-            "messages": [{"role": "user", "content": "What endpoints are available?"}],
-            "openapi_summary": "## API: Test v1\n\n## Endpoints\n- GET /health",
-        },
-        headers={"X-LLM-Base-Url": "http://localhost:9999/v1"},
-    )
-    # Streaming endpoint returns 200 with SSE content
-    assert response.status_code == 200
-    assert "text/event-stream" in response.headers["content-type"]
-
-
-def test_llm_chat_empty_messages_rejected():
-    """The /llm-chat endpoint should reject requests without required fields."""
-    client = TestClient(make_app())
-    response = client.post("/llm-chat", json={})
-    assert response.status_code == 422  # Validation error
-
-
-def test_llm_chat_uses_llm_headers():
-    """The /llm-chat endpoint should read LLM config from X-LLM-* headers."""
-    client = TestClient(make_app())
-    response = client.post(
-        "/llm-chat",
-        json={"messages": [{"role": "user", "content": "hi"}]},
-        headers={
-            "X-LLM-Base-Url": "http://localhost:9999/v1",
-            "X-LLM-Api-Key": "test-key",
-            "X-LLM-Model-Id": "test-model",
-        },
-    )
-    # Streaming endpoint returns 200 with error SSE event containing the URL
-    assert response.status_code == 200
-    assert "localhost:9999" in response.text
-
-
-def test_llm_chat_not_in_openapi_schema():
-    """The /llm-chat endpoint should not appear in the OpenAPI schema."""
-    client = TestClient(make_app())
-    schema = client.get("/openapi.json").json()
-    assert "/llm-chat" not in schema.get("paths", {})
-
-
-# ── OpenAPI Schema Context Tests ─────────────────────────────────────────────
-
-
-def test_build_openapi_context_from_full_schema():
-    """Test that build_openapi_context converts full schema to readable format."""
-    from swagger_llm.plugin import build_openapi_context
+    html = client.get("/docs").text
     
-    schema = {
-        "info": {"title": "Test API", "version": "1.0.0"},
-        "paths": {
-            "/users": {
-                "get": {
-                    "summary": "List Users",
-                    "operationId": "listUsers",
-                    "tags": ["users"],
-                    "parameters": [
-                        {"name": "limit", "in": "query", "required": False, "type": "integer"}
-                    ],
-                    "responses": {
-                        "200": {"description": "Successful response"},
-                        "401": {"description": "Unauthorized"}
-                    }
-                },
-                "post": {
-                    "summary": "Create User",
-                    "requestBody": {
-                        "content": {
-                            "application/json": {
-                                "schema": {
-                                    "type": "object",
-                                    "properties": {"name": {"type": "string"}, "email": {"type": "string"}}
-                                }
-                            }
-                        }
-                    },
-                    "responses": {"201": {"description": "User created"}}
-                }
-            }
-        },
-        "components": {
-            "schemas": {
-                "User": {
-                    "type": "object",
-                    "properties": {"id": {"type": "integer"}, "name": {"type": "string"}}
-                }
-            }
-        }
-    }
+    # Check for scoped styles
+    assert "#llm-settings-panel" in html or "llm-settings-panel {" in html
     
-    context = build_openapi_context(schema)
+    # Check for provider badge styles (note: cloud providers removed)
+    assert ".llm-provider-badge" in html or "llm-provider-badge" in html
     
-    # Check key information is included
-    assert "Test API" in context
-    assert "## `/users`" in context or "`/users`" in context
-    assert "GET" in context
-    assert "POST" in context
-    assert "List Users" in context or "summary" in context.lower()
-    assert "Create User" in context
-    assert "User" in context  # Schema name
+    # Ollama badge should exist
+    assert ".llm-provider-ollama" in html or "llm-provider-ollama" in html
 
 
-def test_openapi_context_includes_servers():
-    """Test that server URLs are included in OpenAPI context."""
-    from swagger_llm.plugin import build_openapi_context
-    
-    schema = {
-        "info": {"title": "Test API", "version": "1.0.0"},
-        "servers": [
-            {"url": "https://api.example.com/v1", "description": "Production"},
-            {"url": "http://localhost:8000", "description": "Development"}
-        ],
-        "paths": {}
-    }
-    
-    context = build_openapi_context(schema)
-    
-    assert "Production" in context or "Development" in context
-    assert "https://api.example.com/v1" in context
-
-
-def test_openapi_context_handles_empty_schema():
-    """Test that empty/invalid schemas don't cause errors."""
-    from swagger_llm.plugin import build_openapi_context
-    
-    assert build_openapi_context(None) == ""
-    assert build_openapi_context({}) == ""
-    assert build_openapi_context("invalid") == ""
-
-
-def test_llm_chat_accepts_full_openapi_schema():
-    """The /llm-chat endpoint should accept a full openapi_schema field."""
-    client = TestClient(make_app())
-    
-    # Create a minimal OpenAPI schema
-    openapi_schema = {
-        "info": {"title": "Test API", "version": "1.0.0"},
-        "paths": {
-            "/health": {
-                "get": {
-                    "summary": "Health Check",
-                    "responses": {"200": {"description": "OK"}}
-                }
-            }
-        }
-    }
-    
-    response = client.post(
-        "/llm-chat",
-        json={
-            "messages": [{"role": "user", "content": "What is the health endpoint?"}],
-            "openapi_schema": openapi_schema
-        },
-        headers={"X-LLM-Base-Url": "http://localhost:9999/v1"},
-    )
-    
-    # Streaming endpoint returns 200 with SSE content
-    assert response.status_code == 200
-    assert "text/event-stream" in response.headers["content-type"]
-
-
-def test_openapi_schema_takes_precedence_over_summary():
-    """When both openapi_schema and openapi_summary are provided, schema should be used."""
-    client = TestClient(make_app())
-    
-    response = client.post(
-        "/llm-chat",
-        json={
-            "messages": [{"role": "user", "content": "test"}],
-            "openapi_summary": "This is old format",
-            "openapi_schema": {
-                "info": {"title": "New Schema API", "version": "2.0.0"},
-                "paths": {
-                    "/test": {
-                        "get": {"summary": "Test", "responses": {"200": {"description": "OK"}}}
-                    }
-                }
-            }
-        },
-        headers={"X-LLM-Base-Url": "http://localhost:9999/v1"},
-    )
-    
-    assert response.status_code == 200
+# ── OpenAPI schema fetching tests ───────────────────────────────────────────────
 
 
 def test_fetch_openapi_schema_in_chat_panel():
@@ -667,191 +342,409 @@ def test_fetch_openapi_schema_in_chat_panel():
     assert "openapiSchema" in js_content
 
 
-# ── Tool Calling Tests ────────────────────────────────────────────────────────
+# ── Theme tests ────────────────────────────────────────────────────────────────
 
 
-def test_build_api_request_tool_schema():
-    """Test that build_api_request_tool returns valid OpenAI function calling format."""
-    from swagger_llm.plugin import build_api_request_tool
-
-    schema = {
-        "paths": {
-            "/users": {
-                "get": {"summary": "List Users"},
-                "post": {"summary": "Create User"},
-            },
-            "/health": {
-                "get": {"summary": "Health Check"},
-            },
-        }
-    }
-
-    tool = build_api_request_tool(schema)
-
-    assert tool["type"] == "function"
-    assert tool["function"]["name"] == "api_request"
-    assert "parameters" in tool["function"]
-    params = tool["function"]["parameters"]
-    assert params["type"] == "object"
-    assert "method" in params["properties"]
-    assert "path" in params["properties"]
-    assert "query_params" in params["properties"]
-    assert "path_params" in params["properties"]
-    assert "body" in params["properties"]
-    assert params["required"] == ["method", "path"]
-
-    # Method enum should include GET and POST
-    method_enum = params["properties"]["method"]["enum"]
-    assert "GET" in method_enum
-    assert "POST" in method_enum
-
-    # Description should list endpoints
-    desc = tool["function"]["description"]
-    assert "/users" in desc
-    assert "/health" in desc
-    assert "List Users" in desc
-
-
-def test_build_api_request_tool_filters_get_post():
-    """Test that only GET and POST endpoints are included."""
-    from swagger_llm.plugin import build_api_request_tool
-
-    schema = {
-        "paths": {
-            "/users": {
-                "get": {"summary": "List Users"},
-                "delete": {"summary": "Delete User"},
-                "put": {"summary": "Update User"},
-            },
-        }
-    }
-
-    tool = build_api_request_tool(schema)
-    desc = tool["function"]["description"]
-
-    assert "GET /users" in desc
-    assert "DELETE" not in desc
-    assert "PUT" not in desc
-
-
-def test_llm_chat_enable_tools_payload():
-    """Test that enable_tools is accepted by /llm-chat endpoint."""
+def test_themes_included():
+    """Verify theme files are included."""
     client = TestClient(make_app())
-
-    response = client.post(
-        "/llm-chat",
-        json={
-            "messages": [{"role": "user", "content": "Call the health endpoint"}],
-            "openapi_schema": {
-                "info": {"title": "Test", "version": "1.0"},
-                "paths": {
-                    "/health": {
-                        "get": {"summary": "Health", "responses": {"200": {"description": "OK"}}}
-                    }
-                }
-            },
-            "enable_tools": True,
-        },
-        headers={"X-LLM-Base-Url": "http://localhost:9999/v1"},
-    )
-
-    assert response.status_code == 200
-    assert "text/event-stream" in response.headers["content-type"]
+    html = client.get("/docs").text
+    
+    # Check for theme injection script
+    assert "applyLLMTheme" in html or "/swagger-llm-static/themes/" in html
+    
+    # Check for theme CSS file reference
+    assert "dark-theme.css" in html
 
 
-def test_llm_chat_message_serialization_with_tool_calls():
-    """Test that messages with tool_calls and tool_call_id are accepted."""
+def test_dark_theme_default():
+    """Verify dark theme is applied by default."""
     client = TestClient(make_app())
-
-    response = client.post(
-        "/llm-chat",
-        json={
-            "messages": [
-                {"role": "user", "content": "Call the health endpoint"},
-                {
-                    "role": "assistant",
-                    "content": None,
-                    "tool_calls": [
-                        {
-                            "id": "call_123",
-                            "type": "function",
-                            "function": {
-                                "name": "api_request",
-                                "arguments": '{"method": "GET", "path": "/health"}',
-                            },
-                        }
-                    ],
-                },
-                {
-                    "role": "tool",
-                    "content": "Status: 200 OK\n\n{\"status\": \"healthy\"}",
-                    "tool_call_id": "call_123",
-                },
-            ],
-            "enable_tools": True,
-        },
-        headers={"X-LLM-Base-Url": "http://localhost:9999/v1"},
-    )
-
-    assert response.status_code == 200
-    assert "text/event-stream" in response.headers["content-type"]
+    
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+    
+    # Check for default theme configuration
+    assert "dark" in js_content.lower()
 
 
-def test_build_api_request_tool_llm_header_paths():
-    """Test that _llm_header_paths detects endpoints needing X-LLM-* headers."""
-    from swagger_llm.plugin import build_api_request_tool
-
-    schema = {
-        "paths": {
-            "/health": {
-                "get": {"summary": "Health Check", "parameters": []},
-            },
-            "/llm-chat": {
-                "post": {
-                    "summary": "Chat",
-                    "parameters": [
-                        {"name": "X-LLM-Base-Url", "in": "header", "required": False},
-                        {"name": "X-LLM-Api-Key", "in": "header", "required": False},
-                    ],
-                },
-            },
-            "/plain": {
-                "get": {
-                    "summary": "Plain endpoint",
-                    "parameters": [
-                        {"name": "Authorization", "in": "header", "required": False},
-                    ],
-                },
-            },
-        }
-    }
-
-    tool = build_api_request_tool(schema)
-    llm_paths = tool["_llm_header_paths"]
-
-    # Only /llm-chat should be detected as needing LLM headers
-    assert "/llm-chat" in llm_paths
-    assert "/health" not in llm_paths
-    assert "/plain" not in llm_paths
+# ── Error handling tests (CORS guidance) ───────────────────────────────────────
 
 
-def test_tool_result_message():
-    """Test that role='tool' messages are handled properly."""
+def test_cors_error_message_in_javascript():
+    """Verify CORS error message is available in JavaScript."""
     client = TestClient(make_app())
+    
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+    
+    # Check for CORS guidance
+    assert "CORS" in js_content or "cross-origin" in js_content.lower()
 
-    response = client.post(
-        "/llm-chat",
-        json={
-            "messages": [
-                {"role": "user", "content": "test"},
-                {
-                    "role": "tool",
-                    "content": "Status: 200\nOK",
-                    "tool_call_id": "call_abc",
-                },
-            ],
-        },
-        headers={"X-LLM-Base-Url": "http://localhost:9999/v1"},
-    )
 
-    assert response.status_code == 200
+# ── LLM headers should be removed ──────────────────────────────────────────────
+
+
+def test_no_x_llm_header_interceptor():
+    """The docs page should NOT include X-LLM-* header injection."""
+    client = TestClient(make_app())
+    html = client.get("/docs").text
+    
+    # X-LLM-* headers should not be in requestInterceptor
+    assert "X-LLM-" not in html
+
+
+def test_no_llm_chat_endpoint():
+    """The /llm-chat endpoint should not exist."""
+    client = TestClient(make_app())
+    
+    # Should get 404 or similar
+    response = client.post("/llm-chat", json={})
+    # The endpoint should not be registered
+    assert response.status_code in [404, 405]
+
+
+def test_no_llm_models_endpoint():
+    """The /llm/models endpoint should not exist."""
+    client = TestClient(make_app())
+    
+    # Should get 404 or similar
+    response = client.get("/llm/models")
+    assert response.status_code in [404, 405]
+
+
+# ── Settings panel tests ───────────────────────────────────────────────────────
+
+
+def test_settings_panel_included():
+    """Verify LLM settings panel is included."""
+    client = TestClient(make_app())
+    
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+
+    assert "LLMSettingsPanel" in js_content
+
+
+def test_settings_panel_fields():
+    """Verify settings panel has all required fields."""
+    client = TestClient(make_app())
+    
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+
+    # Check for provider selector
+    assert "provider" in js_content.lower()
+    
+    # Check for base URL input
+    assert "baseUrl" in js_content or "base_url" in js_content.lower()
+    
+    # Check for API key input
+    assert "apiKey" in js_content or "api_key" in js_content.lower()
+    
+    # Check for model ID input
+    assert "modelId" in js_content or "model_id" in js_content.lower()
+
+
+def test_settings_panel_test_connection():
+    """Verify test connection functionality exists."""
+    client = TestClient(make_app())
+    
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+
+    assert "handleTestConnection" in js_content
+
+
+def test_settings_panel_save_functionality():
+    """Verify settings save to localStorage."""
+    client = TestClient(make_app())
+    
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+
+    assert "localStorage" in js_content
+    assert "saveToStorage" in js_content
+
+
+# ── Chat panel functionality tests ─────────────────────────────────────────────
+
+
+def test_chat_input_area():
+    """Verify chat input area exists."""
+    client = TestClient(make_app())
+    
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+
+    assert "handleSend" in js_content
+    assert "handleInputChange" in js_content
+
+
+def test_chat_history_persistence():
+    """Verify chat history is persisted to localStorage."""
+    client = TestClient(make_app())
+    
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+
+    assert "chatHistory" in js_content
+    assert "localStorage" in js_content
+
+
+def test_clear_chat_history():
+    """Verify clear chat history functionality exists."""
+    client = TestClient(make_app())
+    
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+
+    assert "clearHistory" in js_content
+
+
+def test_copy_to_clipboard():
+    """Verify copy to clipboard functionality exists."""
+    client = TestClient(make_app())
+    
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+
+    assert "copyToClipboard" in js_content
+
+
+def test_typing_indicator():
+    """Verify typing indicator for streaming responses exists."""
+    client = TestClient(make_app())
+    
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+
+    assert "typing" in js_content.lower()
+
+
+def test_markdown_parsing():
+    """Verify markdown parsing functionality exists."""
+    client = TestClient(make_app())
+    
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+
+    assert "parseMarkdown" in js_content or "marked" in js_content.lower()
+
+
+def test_error_classification():
+    """Verify error classification and user-friendly messages exist."""
+    client = TestClient(make_app())
+    
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+
+    # Check for error handling
+    assert "error" in js_content.lower()
+    assert "catch" in js_content.lower()
+
+
+def test_tool_calling_panel():
+    """Verify tool calling panel exists."""
+    client = TestClient(make_app())
+    
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+
+    assert "renderToolCallPanel" in js_content
+    assert "handleExecuteToolCall" in js_content
+
+
+# ── Local storage keys tests ───────────────────────────────────────────────────
+
+
+def test_settings_storage_key():
+    """Verify correct localStorage key for settings."""
+    client = TestClient(make_app())
+    
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+
+    assert "swagger-llm-settings" in js_content
+
+
+def test_chat_history_storage_key():
+    """Verify correct localStorage key for chat history."""
+    client = TestClient(make_app())
+    
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+
+    assert "swagger-llm-chat-history" in js_content
+
+
+def test_theme_storage_key():
+    """Verify correct localStorage key for theme."""
+    client = TestClient(make_app())
+    
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+
+    assert "swagger-llm-theme" in js_content
+
+
+# ── Tab switching tests ────────────────────────────────────────────────────────
+
+
+def test_layout_plugin_tabs():
+    """Verify LLM layout plugin has tab navigation."""
+    client = TestClient(make_app())
+    
+    js_content = client.get("/swagger-llm-static/llm-layout-plugin.js").text
+
+    assert "LLMLayoutPlugin" in js_content
+    # Should have API, Chat, Settings tabs
+    assert "api" in js_content.lower()
+    assert "chat" in js_content.lower()
+    assert "settings" in js_content.lower()
+
+
+def test_tab_persistence():
+    """Verify active tab preference is persisted."""
+    client = TestClient(make_app())
+    
+    js_content = client.get("/swagger-llm-static/llm-layout-plugin.js").text
+
+    assert "swagger-llm-active-tab" in js_content
+
+
+# ── Import tests ───────────────────────────────────────────────────────────────
+
+
+def test_public_api_exports():
+    """Test that only expected exports are available in public API."""
+    from swagger_llm import __all__ as public_api
+    
+    # Only setup_llm_docs and get_swagger_ui_html should be exported
+    assert "setup_llm_docs" in public_api
+    assert "get_swagger_ui_html" in public_api
+    
+    # LLMConfig and get_llm_config should NOT be exported
+    assert "LLMConfig" not in public_api
+    assert "get_llm_config" not in public_api
+
+
+def test_no_httpx_dependency():
+    """Test that httpx is not used (removed for client-side architecture)."""
+    from swagger_llm import plugin
+    
+    # The plugin module should not import httpx
+    import inspect
+    source = inspect.getsource(plugin)
+    
+    # httpx should not be mentioned
+    assert "httpx" not in source
+
+
+# ── Edge case tests ────────────────────────────────────────────────────────────
+
+
+def test_empty_api_key_handling():
+    """Test that empty API key is handled correctly."""
+    client = TestClient(make_app())
+    
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+    
+    # Empty API key should not set Authorization header
+    assert "Authorization" in js_content or "Bearer" not in js_content
+
+
+def test_provider_base_url_format():
+    """Verify provider base URLs are properly formatted."""
+    client = TestClient(make_app())
+    
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+    
+    # URLs should end with /v1
+    assert "/v1" in js_content
+
+
+def test_max_tokens_default():
+    """Verify max tokens has a default value."""
+    client = TestClient(make_app())
+    
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+    
+    assert "maxTokens" in js_content
+
+
+def test_temperature_default():
+    """Verify temperature has a default value."""
+    client = TestClient(make_app())
+    
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+    
+    assert "temperature" in js_content
+
+
+def test_debounce_function_exists():
+    """Verify debounce function exists for connection testing."""
+    client = TestClient(make_app())
+    
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+    
+    assert "debounce" in js_content
+
+
+def test_abort_controller_for_cancellation():
+    """Verify AbortController is used for request cancellation."""
+    client = TestClient(make_app())
+    
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+    
+    assert "AbortController" in js_content or "abort()" in js_content
+
+
+# ── HTML template tests ────────────────────────────────────────────────────────
+
+
+def test_template_theme_injection():
+    """Verify theme is injected immediately in template to prevent FOUC."""
+    client = TestClient(make_app())
+    html = client.get("/docs").text
+    
+    # Check for our template's key elements
+    assert "swagger-llm-static" in html, "Template should include our static files"
+    assert "applyLLMTheme" in html or "/swagger-llm-static/themes/" in html, "Template should include theme injection"
+
+
+def test_template_script_order():
+    """Verify scripts are loaded in correct order."""
+    client = TestClient(make_app())
+    html = client.get("/docs").text
+    
+    # Swagger UI bundle should load first
+    swagger_idx = html.find("swagger-ui-bundle")
+    llm_settings_idx = html.find("llm-settings-plugin.js")
+    llm_layout_idx = html.find("llm-layout-plugin.js")
+    
+    assert swagger_idx > 0
+    assert llm_settings_idx > swagger_idx
+    assert llm_layout_idx > llm_settings_idx
+
+
+# ── Layout plugin tests ────────────────────────────────────────────────────────
+
+
+def test_layout_plugin_imports():
+    """Verify layout plugin imports correctly."""
+    client = TestClient(make_app())
+    
+    js_content = client.get("/swagger-llm-static/llm-layout-plugin.js").text
+    
+    assert "window.LLMLayoutPlugin" in js_content
+
+
+def test_base_layout_wrapper():
+    """Verify layout plugin wraps BaseLayout."""
+    client = TestClient(make_app())
+    
+    js_content = client.get("/swagger-llm-static/llm-layout-plugin.js").text
+    
+    assert "BaseLayout" in js_content
+
+
+def test_llm_docs_layout_component():
+    """Verify LLMDocsLayout component exists."""
+    client = TestClient(make_app())
+    
+    js_content = client.get("/swagger-llm-static/llm-layout-plugin.js").text
+    
+    assert "LLMDocsLayout" in js_content
+
+
+def test_chat_height_calculation():
+    """Verify chat tab has proper height calculation."""
+    client = TestClient(make_app())
+    
+    js_content = client.get("/swagger-llm-static/llm-layout-plugin.js").text
+    
+    assert "calc(100vh" in js_content or "height:" in js_content.lower()

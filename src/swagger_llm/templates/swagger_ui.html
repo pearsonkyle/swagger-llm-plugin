@@ -67,95 +67,19 @@
         }
       }
 
-      // Cache for LLM header paths (loaded on demand)
-      var _llmHeaderPathsCache = null;
-
-      // Fetch LLM header paths from backend
-      function fetchLLMHeaderPaths() {
-        if (_llmHeaderPathsCache !== null) {
-          return Promise.resolve(_llmHeaderPathsCache);
-        }
-        return fetch('/swagger-llm/llm-header-paths')
-          .then(function(res) { return res.json(); })
-          .then(function(data) {
-            _llmHeaderPathsCache = data.paths || [];
-            return _llmHeaderPathsCache;
-          })
-          .catch(function(err) {
-            console.warn('Failed to fetch LLM header paths:', err);
-            _llmHeaderPathsCache = [];
-            return [];
-          });
-      }
-
-      // Check if an endpoint path requires X-LLM-* headers
-      function endpointNeedsLLMHeaders(path) {
-        if (_llmHeaderPathsCache === null) return false;
-        // Check if any path in the list matches or is a prefix
-        return _llmHeaderPathsCache.some(function(p) {
-          // Handle path matching - exact match or prefix with parameter
-          if (p === path) return true;
-          // For paths like /chat/completions vs /swagger-llm/llm-header-paths
-          // Simple prefix matching for this use case
-          return path === p;
-        });
-      }
-
       window.onload = function () {
-        // Fetch LLM header paths before initializing Swagger UI
-        fetchLLMHeaderPaths().then(function() {
-          var ui = SwaggerUIBundle({
-            url: "{{ openapi_url }}",
-            dom_id: "#swagger-ui",
-            presets: [SwaggerUIBundle.presets.apis, SwaggerUIBundle.SwaggerUIStandalonePreset],
-            plugins: [
-              SwaggerUIBundle.plugins.DownloadUrl,
-              LLMSettingsPlugin,
-              LLMLayoutPlugin,
-            ],
-            layout: "LLMDocsLayout",
-
-            // Inject X-LLM-* headers only for endpoints that declare them
-            requestInterceptor: function (request) {
-              // Extract path from URL (handle absolute and relative URLs)
-              var url = request.url || '';
-              var path = url;
-              
-              // Remove origin if present (absolute URL)
-              try {
-                var urlObj = new URL(url, window.location.origin);
-                path = urlObj.pathname;
-              } catch (e) {
-                // If URL parsing fails, use as-is
-                if (!path.startsWith('/')) {
-                  path = '/' + path;
-                }
-              }
-
-              // Only add LLM headers if this endpoint declares them
-              if (endpointNeedsLLMHeaders(path)) {
-                var settings = getLLMSettings();
-                if (settings.baseUrl) {
-                  request.headers["X-LLM-Base-Url"] = settings.baseUrl;
-                }
-                if (settings.apiKey) {
-                  request.headers["X-LLM-Api-Key"] = settings.apiKey;
-                }
-                if (settings.modelId) {
-                  request.headers["X-LLM-Model-Id"] = settings.modelId;
-                }
-                if (settings.maxTokens != null && settings.maxTokens !== '') {
-                  request.headers["X-LLM-Max-Tokens"] = String(settings.maxTokens);
-                }
-                if (settings.temperature != null && settings.temperature !== '') {
-                  request.headers["X-LLM-Temperature"] = String(settings.temperature);
-                }
-              }
-              return request;
-            },
-          });
-          window.ui = ui;
+        var ui = SwaggerUIBundle({
+          url: "{{ openapi_url }}",
+          dom_id: "#swagger-ui",
+          presets: [SwaggerUIBundle.presets.apis, SwaggerUIBundle.SwaggerUIStandalonePreset],
+          plugins: [
+            SwaggerUIBundle.plugins.DownloadUrl,
+            LLMSettingsPlugin,
+            LLMLayoutPlugin,
+          ],
+          layout: "LLMDocsLayout",
         });
+        window.ui = ui;
       };
     </script>
   </body>

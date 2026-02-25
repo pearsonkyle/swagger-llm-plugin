@@ -68,3 +68,7 @@ uvicorn examples.demo_server:app --reload
 pip install -e ".[dev]"
 pytest tests/
 ```
+
+## To Do
+- more client side LLM
+- expose system prompt settings into file so it can be edited more easily and support presets in the future

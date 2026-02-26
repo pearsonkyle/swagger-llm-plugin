@@ -748,3 +748,97 @@ def test_chat_height_calculation():
     js_content = client.get("/swagger-llm-static/llm-layout-plugin.js").text
     
     assert "calc(100vh" in js_content or "height:" in js_content.lower()
+
+
+# ── Workflow tab tests ─────────────────────────────────────────────────────
+
+
+def test_workflow_tab_in_layout():
+    """Verify layout plugin has Workflow tab."""
+    client = TestClient(make_app())
+
+    js_content = client.get("/swagger-llm-static/llm-layout-plugin.js").text
+
+    assert "workflow" in js_content.lower()
+    assert "WorkflowPanel" in js_content
+
+
+def test_workflow_panel_component():
+    """Verify WorkflowPanel component is included."""
+    client = TestClient(make_app())
+
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+
+    assert "WorkflowPanel" in js_content
+    assert "WorkflowPanelFactory" in js_content
+
+
+def test_workflow_panel_controls():
+    """Verify workflow panel has start/stop/reset buttons."""
+    client = TestClient(make_app())
+
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+
+    assert "handleStart" in js_content
+    assert "handleStop" in js_content
+    assert "handleReset" in js_content
+
+
+def test_workflow_panel_block_management():
+    """Verify workflow panel has add/remove block functionality."""
+    client = TestClient(make_app())
+
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+
+    assert "handleAddBlock" in js_content
+    assert "handleRemoveBlock" in js_content
+
+
+def test_workflow_panel_block_output():
+    """Verify workflow panel displays block outputs."""
+    client = TestClient(make_app())
+
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+
+    assert "output" in js_content
+    assert "runWorkflow" in js_content
+
+
+def test_workflow_panel_block_chaining():
+    """Verify workflow panel feeds output of each block into the next."""
+    client = TestClient(make_app())
+
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+
+    assert "previousOutput" in js_content
+    assert "Previous step output" in js_content
+
+
+def test_workflow_panel_tool_execution():
+    """Verify workflow panel supports LLM tool execution in blocks."""
+    client = TestClient(make_app())
+
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+
+    assert "executeToolCall" in js_content
+    assert "tool_calls" in js_content
+    assert "Tool Result" in js_content
+
+
+def test_workflow_storage_key():
+    """Verify correct localStorage key for workflow."""
+    client = TestClient(make_app())
+
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+
+    assert "swagger-llm-workflow" in js_content
+
+
+def test_workflow_styles_injected():
+    """Verify workflow panel CSS is injected."""
+    client = TestClient(make_app())
+
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+
+    assert "swagger-llm-workflow-styles" in js_content
+    assert "llm-workflow" in js_content

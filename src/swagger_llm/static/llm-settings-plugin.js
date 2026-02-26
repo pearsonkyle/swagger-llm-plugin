@@ -2770,6 +2770,586 @@
   
   injectStyles('swagger-llm-chat-styles', chatStyles);
 
+  // ── Workflow storage helpers ────────────────────────────────────────────────
+  var WORKFLOW_STORAGE_KEY = 'swagger-llm-workflow';
+
+  function loadWorkflow() {
+    try {
+      var data = localStorage.getItem(WORKFLOW_STORAGE_KEY);
+      if (data) return JSON.parse(data);
+    } catch (e) {}
+    return null;
+  }
+
+  function saveWorkflow(workflow) {
+    try {
+      localStorage.setItem(WORKFLOW_STORAGE_KEY, JSON.stringify(workflow));
+    } catch (e) {}
+  }
+
+  function createDefaultBlock() {
+    return {
+      id: generateMessageId(),
+      type: 'prompt',
+      content: '',
+      output: '',
+      status: 'idle'
+    };
+  }
+
+  // ── Workflow panel component ───────────────────────────────────────────────
+  function WorkflowPanelFactory(system) {
+    var React = system.React;
+
+    return class WorkflowPanel extends React.Component {
+      constructor(props) {
+        super(props);
+        var saved = loadWorkflow();
+        this.state = {
+          blocks: saved && saved.blocks ? saved.blocks : [createDefaultBlock()],
+          running: false,
+          currentBlockIdx: -1,
+          aborted: false,
+        };
+        this._abortController = null;
+        this.handleStart = this.handleStart.bind(this);
+        this.handleStop = this.handleStop.bind(this);
+        this.handleReset = this.handleReset.bind(this);
+        this.handleAddBlock = this.handleAddBlock.bind(this);
+        this.handleRemoveBlock = this.handleRemoveBlock.bind(this);
+        this.handleBlockContentChange = this.handleBlockContentChange.bind(this);
+        this.runWorkflow = this.runWorkflow.bind(this);
+      }
+
+      componentDidUpdate(prevProps, prevState) {
+        if (prevState.blocks !== this.state.blocks) {
+          saveWorkflow({ blocks: this.state.blocks });
+        }
+      }
+
+      componentWillUnmount() {
+        if (this._abortController) {
+          this._abortController.abort();
+          this._abortController = null;
+        }
+      }
+
+      handleAddBlock() {
+        this.setState(function(prev) {
+          return { blocks: prev.blocks.concat([createDefaultBlock()]) };
+        });
+      }
+
+      handleRemoveBlock(blockId) {
+        this.setState(function(prev) {
+          if (prev.blocks.length <= 1) return {};
+          return { blocks: prev.blocks.filter(function(b) { return b.id !== blockId; }) };
+        });
+      }
+
+      handleBlockContentChange(blockId, value) {
+        this.setState(function(prev) {
+          return {
+            blocks: prev.blocks.map(function(b) {
+              if (b.id === blockId) return Object.assign({}, b, { content: value });
+              return b;
+            })
+          };
+        });
+      }
+
+      handleStart() {
+        var self = this;
+        self.setState(function(prev) {
+          return {
+            running: true,
+            aborted: false,
+            currentBlockIdx: 0,
+            blocks: prev.blocks.map(function(b) {
+              return Object.assign({}, b, { output: '', status: 'idle' });
+            })
+          };
+        }, function() {
+          self.runWorkflow();
+        });
+      }
+
+      handleStop() {
+        if (this._abortController) {
+          this._abortController.abort();
+        }
+        this.setState({ running: false, aborted: true, currentBlockIdx: -1 });
+      }
+
+      handleReset() {
+        if (this._abortController) {
+          this._abortController.abort();
+        }
+        this.setState({
+          blocks: [createDefaultBlock()],
+          running: false,
+          currentBlockIdx: -1,
+          aborted: false,
+        });
+        saveWorkflow({ blocks: [createDefaultBlock()] });
+      }
+
+      runWorkflow() {
+        var self = this;
+        var blocks = self.state.blocks.slice();
+        var previousOutput = '';
+
+        function runBlock(idx) {
+          if (idx >= blocks.length || self.state.aborted) {
+            self.setState({ running: false, currentBlockIdx: -1 });
+            return;
+          }
+
+          self.setState({ currentBlockIdx: idx });
+
+          var block = blocks[idx];
+          var updatedBlocks = self.state.blocks.slice();
+          updatedBlocks[idx] = Object.assign({}, updatedBlocks[idx], { status: 'running', output: '' });
+          self.setState({ blocks: updatedBlocks });
+
+          var prompt = block.content || '';
+          if (previousOutput) {
+            prompt = 'Previous step output:\n' + previousOutput + '\n\n' + prompt;
+          }
+
+          var settings = loadFromStorage();
+          var toolSettings = loadToolSettings();
+          var systemPrompt = 'You are a workflow assistant. Execute the user instructions step by step. Be concise in your responses.';
+
+          if (toolSettings.enableTools) {
+            systemPrompt += '\n\nYou have access to the `api_request` tool to execute API calls. Use it when the user asks to call an endpoint.';
+          }
+
+          var messages = [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: prompt }
+          ];
+
+          var payload = {
+            messages: messages,
+            model: settings.modelId || 'llama3',
+            max_tokens: settings.maxTokens != null && settings.maxTokens !== '' ? parseInt(settings.maxTokens) : 4096,
+            temperature: settings.temperature != null && settings.temperature !== '' ? parseFloat(settings.temperature) : 0.7,
+            stream: true,
+          };
+
+          if (toolSettings.enableTools) {
+            var fullSchema = null;
+            try {
+              var storedSettings = loadFromStorage();
+              if (storedSettings.openapiSchema) fullSchema = storedSettings.openapiSchema;
+            } catch (e) {}
+            if (fullSchema) {
+              payload.tools = [buildApiRequestTool(fullSchema)];
+              payload.tool_choice = 'auto';
+            }
+          }
+
+          var fetchHeaders = { 'Content-Type': 'application/json' };
+          if (settings.apiKey) {
+            fetchHeaders['Authorization'] = 'Bearer ' + settings.apiKey;
+          }
+
+          var baseUrl = (settings.baseUrl || '').replace(/\/+$/, '');
+          self._abortController = new AbortController();
+          var accumulated = '';
+          var accumulatedToolCalls = {};
+
+          fetch(baseUrl + '/chat/completions', {
+            method: 'POST',
+            headers: fetchHeaders,
+            body: JSON.stringify(payload),
+            signal: self._abortController.signal
+          })
+            .then(function(res) {
+              if (!res.ok) {
+                return res.text().then(function(text) {
+                  throw new Error('HTTP ' + res.status + ': ' + res.statusText + (text ? ' - ' + text : ''));
+                });
+              }
+              var reader = res.body.getReader();
+              var decoder = new TextDecoder();
+              var buffer = '';
+
+              function processChunk() {
+                return reader.read().then(function(result) {
+                  if (self.state.aborted) return;
+                  if (result.done) {
+                    return finishBlock(accumulated);
+                  }
+
+                  buffer += decoder.decode(result.value, { stream: true });
+                  var lines = buffer.split('\n');
+                  buffer = lines.pop() || '';
+
+                  for (var i = 0; i < lines.length; i++) {
+                    var line = lines[i].trim();
+                    if (!line || !line.startsWith('data: ')) continue;
+                    var payloadData = line.substring(6);
+                    if (payloadData === '[DONE]') {
+                      return finishBlock(accumulated);
+                    }
+
+                    try {
+                      var chunk = JSON.parse(payloadData);
+                      if (chunk.error) {
+                        return finishBlock('Error: ' + chunk.error);
+                      }
+                      var choice = chunk.choices && chunk.choices[0];
+                      if (!choice) continue;
+
+                      if (choice.delta && choice.delta.content) {
+                        accumulated += choice.delta.content;
+                        var currentBlocks = self.state.blocks.slice();
+                        currentBlocks[idx] = Object.assign({}, currentBlocks[idx], { output: accumulated });
+                        self.setState({ blocks: currentBlocks });
+                      }
+
+                      if (choice.delta && choice.delta.tool_calls) {
+                        choice.delta.tool_calls.forEach(function(tc) {
+                          var tcIdx = tc.index != null ? tc.index : 0;
+                          if (!accumulatedToolCalls[tcIdx]) {
+                            accumulatedToolCalls[tcIdx] = { id: '', function: { name: '', arguments: '' } };
+                          }
+                          if (tc.id) accumulatedToolCalls[tcIdx].id = tc.id;
+                          if (tc.function) {
+                            if (tc.function.name) accumulatedToolCalls[tcIdx].function.name = tc.function.name;
+                            if (tc.function.arguments) accumulatedToolCalls[tcIdx].function.arguments += tc.function.arguments;
+                          }
+                        });
+                      }
+
+                      if (choice.finish_reason === 'tool_calls') {
+                        var toolCallsList = Object.keys(accumulatedToolCalls).map(function(k) {
+                          return accumulatedToolCalls[k];
+                        });
+                        if (toolCallsList.length > 0) {
+                          executeToolCall(toolCallsList[0], idx, messages, function(toolOutput) {
+                            accumulated += '\n\n[Tool Result]\n' + toolOutput;
+                            var currentBlocks2 = self.state.blocks.slice();
+                            currentBlocks2[idx] = Object.assign({}, currentBlocks2[idx], { output: accumulated });
+                            self.setState({ blocks: currentBlocks2 });
+                            finishBlock(accumulated);
+                          });
+                          return;
+                        }
+                      }
+                    } catch (e) {}
+                  }
+
+                  return processChunk();
+                });
+              }
+
+              return processChunk();
+            })
+            .catch(function(err) {
+              if (err.name !== 'AbortError') {
+                finishBlock('Error: ' + (err.message || 'Request failed'));
+              }
+            });
+
+          function executeToolCall(tc, blockIdx, currentMessages, callback) {
+            var args = {};
+            try { args = JSON.parse(tc.function.arguments || '{}'); } catch (e) {}
+            var method = args.method || 'GET';
+            var url = args.path || '';
+
+            try {
+              var pathParams = args.path_params || {};
+              Object.keys(pathParams).forEach(function(key) {
+                url = url.replace('{' + key + '}', encodeURIComponent(pathParams[key]));
+              });
+            } catch (e) {}
+
+            try {
+              var queryParams = args.query_params || {};
+              var queryKeys = Object.keys(queryParams);
+              if (queryKeys.length > 0) {
+                var qs = queryKeys.map(function(k) {
+                  return encodeURIComponent(k) + '=' + encodeURIComponent(queryParams[k]);
+                }).join('&');
+                url += (url.indexOf('?') >= 0 ? '&' : '?') + qs;
+              }
+            } catch (e) {}
+
+            var toolFetchHeaders = {};
+            var tSettings = loadToolSettings();
+            var toolApiKey = tSettings.apiKey && typeof tSettings.apiKey === 'string' ? tSettings.apiKey.trim() : '';
+            if (toolApiKey) {
+              toolFetchHeaders['Authorization'] = 'Bearer ' + toolApiKey;
+            }
+
+            var fetchOpts = { method: method, headers: toolFetchHeaders };
+            if (method === 'POST' && args.body) {
+              fetchOpts.body = JSON.stringify(args.body);
+              toolFetchHeaders['Content-Type'] = 'application/json';
+            }
+
+            fetch(url, fetchOpts)
+              .then(function(res) {
+                return res.text().then(function(text) {
+                  callback('Status: ' + res.status + ' ' + res.statusText + '\n\n' + text.substring(0, 4000));
+                });
+              })
+              .catch(function(err) {
+                callback('Error: ' + err.message);
+              });
+          }
+
+          function finishBlock(output) {
+            previousOutput = output;
+            var currentBlocks = self.state.blocks.slice();
+            currentBlocks[idx] = Object.assign({}, currentBlocks[idx], {
+              output: output || '(no output)',
+              status: 'done'
+            });
+            self.setState({ blocks: currentBlocks }, function() {
+              runBlock(idx + 1);
+            });
+          }
+        }
+
+        runBlock(0);
+      }
+
+      render() {
+        var React = system.React;
+        var self = this;
+        var s = this.state;
+
+        var containerStyle = {
+          display: 'flex',
+          flexDirection: 'column',
+          height: '100%',
+          fontFamily: "'Inter', 'Segoe UI', sans-serif",
+          overflow: 'hidden',
+        };
+
+        var toolbarStyle = {
+          display: 'flex',
+          gap: '8px',
+          padding: '12px 16px',
+          borderBottom: '1px solid var(--theme-border-color)',
+          background: 'var(--theme-panel-bg)',
+          flexShrink: 0,
+          flexWrap: 'wrap',
+          alignItems: 'center',
+        };
+
+        var btnStyle = function(color) {
+          return {
+            background: color || 'var(--theme-primary)',
+            color: '#fff',
+            border: 'none',
+            borderRadius: '4px',
+            padding: '6px 14px',
+            cursor: 'pointer',
+            fontSize: '12px',
+            fontWeight: '500',
+            transition: 'all 0.2s ease',
+          };
+        };
+
+        var blocksContainerStyle = {
+          flex: 1,
+          overflowY: 'auto',
+          padding: '16px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '12px',
+        };
+
+        return React.createElement(
+          'div',
+          { style: containerStyle },
+          // Toolbar
+          React.createElement(
+            'div',
+            { style: toolbarStyle },
+            React.createElement('button', {
+              onClick: self.handleStart,
+              disabled: s.running,
+              style: Object.assign({}, btnStyle('#10b981'), s.running ? { opacity: 0.5, cursor: 'not-allowed' } : {})
+            }, '▶ Start'),
+            React.createElement('button', {
+              onClick: self.handleStop,
+              disabled: !s.running,
+              style: Object.assign({}, btnStyle('#ef4444'), !s.running ? { opacity: 0.5, cursor: 'not-allowed' } : {})
+            }, '■ Stop'),
+            React.createElement('button', {
+              onClick: self.handleReset,
+              style: btnStyle('var(--theme-accent)')
+            }, '↺ Reset'),
+            React.createElement('div', { style: { width: '1px', height: '24px', background: 'var(--theme-border-color)' } }),
+            React.createElement('button', {
+              onClick: self.handleAddBlock,
+              disabled: s.running,
+              style: Object.assign({}, btnStyle('var(--theme-primary)'), s.running ? { opacity: 0.5, cursor: 'not-allowed' } : {})
+            }, '+ Add Block'),
+            s.running ? React.createElement('span', {
+              style: { fontSize: '12px', color: 'var(--theme-text-secondary)', marginLeft: 'auto' }
+            }, 'Running block ' + (s.currentBlockIdx + 1) + ' of ' + s.blocks.length + '…') : null
+          ),
+          // Blocks
+          React.createElement(
+            'div',
+            { style: blocksContainerStyle },
+            s.blocks.length === 0
+              ? React.createElement('div', {
+                  style: { textAlign: 'center', color: 'var(--theme-text-secondary)', padding: '40px', fontSize: '14px' }
+                }, 'No blocks yet. Click "+ Add Block" to get started.')
+              : s.blocks.map(function(block, idx) {
+                  var isActive = s.running && s.currentBlockIdx === idx;
+                  var isDone = block.status === 'done';
+
+                  var blockWrapperStyle = {
+                    background: 'var(--theme-input-bg)',
+                    border: '1px solid ' + (isActive ? 'var(--theme-primary)' : 'var(--theme-border-color)'),
+                    borderRadius: '8px',
+                    overflow: 'hidden',
+                    transition: 'all 0.2s ease',
+                    boxShadow: isActive ? '0 0 0 2px rgba(99,102,241,0.2)' : 'none',
+                  };
+
+                  var blockHeaderStyle = {
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    padding: '8px 12px',
+                    background: isActive ? 'var(--theme-primary)' : 'var(--theme-panel-bg)',
+                    borderBottom: '1px solid var(--theme-border-color)',
+                    transition: 'all 0.2s ease',
+                  };
+
+                  var statusBadge = null;
+                  if (block.status === 'running') {
+                    statusBadge = React.createElement('span', {
+                      style: { fontSize: '10px', fontWeight: '600', color: '#fff', background: '#f59e0b', padding: '2px 8px', borderRadius: '4px' }
+                    }, 'RUNNING');
+                  } else if (block.status === 'done') {
+                    statusBadge = React.createElement('span', {
+                      style: { fontSize: '10px', fontWeight: '600', color: '#fff', background: '#10b981', padding: '2px 8px', borderRadius: '4px' }
+                    }, 'DONE');
+                  }
+
+                  return React.createElement(
+                    'div',
+                    { key: block.id, style: blockWrapperStyle },
+                    // Block header
+                    React.createElement(
+                      'div',
+                      { style: blockHeaderStyle },
+                      React.createElement(
+                        'div',
+                        { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+                        React.createElement('span', {
+                          style: {
+                            color: isActive ? '#fff' : 'var(--theme-text-secondary)',
+                            fontSize: '10px',
+                            fontFamily: "'Inter', sans-serif",
+                            fontWeight: '600',
+                            textTransform: 'uppercase',
+                          }
+                        }, 'Block ' + (idx + 1)),
+                        statusBadge
+                      ),
+                      !s.running ? React.createElement('button', {
+                        onClick: function() { self.handleRemoveBlock(block.id); },
+                        style: {
+                          background: 'transparent',
+                          border: 'none',
+                          color: isActive ? '#fff' : 'var(--theme-text-secondary)',
+                          cursor: 'pointer',
+                          fontSize: '14px',
+                          padding: '2px 6px',
+                          borderRadius: '4px',
+                        },
+                        title: 'Remove block'
+                      }, '✕') : null
+                    ),
+                    // Block content textarea
+                    React.createElement('textarea', {
+                      value: block.content,
+                      onChange: function(e) { self.handleBlockContentChange(block.id, e.target.value); },
+                      disabled: s.running,
+                      placeholder: 'Enter a prompt, query, or instruction for this step…',
+                      style: {
+                        width: '100%',
+                        boxSizing: 'border-box',
+                        background: 'var(--theme-input-bg)',
+                        color: 'var(--theme-text-primary)',
+                        border: 'none',
+                        borderBottom: block.output ? '1px solid var(--theme-border-color)' : 'none',
+                        padding: '12px',
+                        fontSize: '13px',
+                        fontFamily: "'Consolas', 'Monaco', monospace",
+                        resize: 'vertical',
+                        minHeight: '72px',
+                        lineHeight: '1.6',
+                        outline: 'none',
+                      }
+                    }),
+                    // Block output
+                    block.output ? React.createElement(
+                      'div',
+                      {
+                        style: {
+                          padding: '0',
+                          margin: 0,
+                          overflowX: 'auto',
+                          whiteSpace: 'pre-wrap',
+                          wordBreak: 'break-all',
+                          cursor: 'pointer',
+                        },
+                        onClick: function() {
+                          copyToClipboard(block.output);
+                        },
+                        title: 'Click to copy output'
+                      },
+                      React.createElement(
+                        'pre',
+                        {
+                          style: {
+                            padding: '12px',
+                            margin: 0,
+                            overflowX: 'auto',
+                            whiteSpace: 'pre-wrap',
+                            wordBreak: 'break-all',
+                            color: isDone ? '#a5b4fc' : 'var(--theme-text-primary)',
+                            lineHeight: '1.6',
+                            fontSize: '13px',
+                            fontFamily: "'Consolas', 'Monaco', monospace",
+                            maxHeight: '300px',
+                            overflowY: 'auto',
+                          }
+                        },
+                        React.createElement('code', null, block.output)
+                      )
+                    ) : null
+                  );
+                })
+          )
+        );
+      }
+    };
+  }
+
+  // ── Workflow panel CSS ─────────────────────────────────────────────────────
+  var workflowStyles = [
+    '.llm-workflow-container { display: flex; flex-direction: column; height: 100%; min-height: 0; overflow: hidden; }',
+    '.llm-workflow-block { background: var(--theme-input-bg); border: 1px solid var(--theme-border-color); border-radius: 8px; overflow: hidden; transition: all 0.2s ease; }',
+    '.llm-workflow-block:hover { border-color: var(--theme-accent); box-shadow: 0 2px 8px rgba(0,0,0,0.1); }',
+    '.llm-workflow-block-header { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; background: var(--theme-panel-bg); border-bottom: 1px solid var(--theme-border-color); }',
+  ].join('\n');
+
+  injectStyles('swagger-llm-workflow-styles', workflowStyles);
+
   // ── Plugin definition ───────────────────────────────────────────────────────
   window.LLMSettingsPlugin = function (system) {
     return {
@@ -2783,6 +3363,7 @@
       components: {
         LLMSettingsPanel: LLMSettingsPanelFactory(system),
         ChatPanel: ChatPanelFactory(system),
+        WorkflowPanel: WorkflowPanelFactory(system),
       },
     };
   };

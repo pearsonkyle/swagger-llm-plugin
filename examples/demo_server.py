@@ -9,7 +9,8 @@ from typing import Any, Dict, List
 
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+from datetime import date
 
 import sys
 import os
@@ -20,44 +21,51 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from swagger_llm import setup_llm_docs
 
 app = FastAPI(
-    title="Demo Server",
+    title="Invoice API",
     version="0.3.0",
     description="""
 A demonstration of LLM-enhanced API documentation using the [swagger-llm-plugin](https://github.com/pearsonkyle/swagger-llm-plugin).
-
-## Features
-
-- 💬 AI chat assistant with full OpenAPI context
-- 🤖 LLM Settings with local providers (Ollama, LM Studio, vLLM, Custom)
-- 🔗 Tool-calling for API Requests
-- 🎨 Dark/light theme support
-
-## Installation
-
-```bash
-pip install swagger-llm
-```
-
-## Quick Start
-
-```python
-from fastapi import FastAPI
-from swagger_llm import setup_docs
-
-app = FastAPI()
-setup_docs(app)  # replaces default /docs
-```
-
-### Example
-
-Use the **Chat** panel to ask questions about these endpoints!
 """,
 )
 
 # Mount the LLM-enhanced Swagger UI (replaces the default /docs)
 setup_llm_docs(app, debug=True)
 
-# ── Endpoints (simple examples) ──────────────────────────────────────────────
+# ── Pydantic Models for Invoicing ────────────────────────────────────────────
+
+class LineItem(BaseModel):
+    """A single line item in an invoice."""
+    description: str = Field(..., description="Description of the item")
+    quantity: int = Field(default=1, ge=1, description="Quantity of items")
+    unit_price: float = Field(..., gt=0, description="Price per unit")
+
+
+class CreateInvoice(BaseModel):
+    """Input model for creating a new invoice."""
+    customer_name: str = Field(..., min_length=1, description="Customer's name")
+    customer_email: str = Field(..., description="Customer's email address")
+    items: List[LineItem] = Field(..., min_length=1, description="List of line items")
+    due_date: date = Field(default_factory=date.today, description="Invoice due date")
+
+
+class Invoice(BaseModel):
+    """Complete invoice model."""
+    id: int
+    created_at: date
+    customer_name: str
+    customer_email: str
+    items: List[LineItem]
+    due_date: date
+    total_amount: float
+
+
+# ── In-Memory Storage ───────────────────────────────────────────────────────
+
+invoices: List[Invoice] = []
+invoice_counter = 0
+
+# ── Endpoints ───────────────────────────────────────────────────────────────
+
 
 @app.get("/health", tags=["utility"])
 async def health():
@@ -69,45 +77,55 @@ async def health():
     return {"status": "ok"}
 
 
-@app.get("/info", tags=["utility"])
-async def info():
-    """Info endpoint.
+@app.get("/invoices", response_model=List[Invoice], tags=["invoices"])
+async def list_invoices():
+    """List all invoices.
     
-    Returns information about this demo server, including package version
-    and available features.
+    Returns a list of all created invoices with their details and totals.
     """
-    return {
-        "package_version": "0.3.0",
-        "features": [
-            "LLM provider presets (Ollama, LM Studio, vLLM)",
-            "Client-side LLM calls (no server proxy)",
-            "Connection testing with visual feedback",
-            "Inline chat panel for API questions",
-        ],
-    }
+    return invoices
 
 
-@app.post("/greet", tags=["demo"])
-async def greet(name: str = "World"):
-    """Simple greeting endpoint.
+@app.post("/invoices", response_model=Invoice, status_code=201, tags=["invoices"])
+async def create_invoice(invoice_data: CreateInvoice):
+    """Create a new invoice.
     
-    Demonstrates a basic API endpoint that doesn't require LLM configuration.
+    Creates an invoice from the provided data and assigns it a unique ID.
     """
-    return {"message": f"Hello, {name}!"}
-
-
-@app.get("/items", tags=["demo"])
-async def list_items(limit: int = 10):
-    """List items endpoint.
+    global invoice_counter
     
-    Demonstrates a basic API with query parameters.
+    # Calculate total amount
+    total = sum(item.quantity * item.unit_price for item in invoice_data.items)
+    
+    invoice_counter += 1
+    
+    new_invoice = Invoice(
+        id=invoice_counter,
+        created_at=date.today(),
+        total_amount=total,
+        **invoice_data.model_dump()
+    )
+    
+    # Add the calculated total
+    invoices.append(new_invoice)
+    
+    return new_invoice
+
+
+@app.get("/invoices/{invoice_id}", response_model=Invoice, tags=["invoices"])
+async def get_invoice(invoice_id: int):
+    """Get a specific invoice by ID.
+    
+    Retrieves the details of an invoice including all line items and totals.
     """
-    return {
-        "items": [
-            {"id": i, "name": f"Item {i}", "price": round(10.99 * (1 + i * 0.1), 2)}
-            for i in range(1, min(limit + 1, 21))
-        ]
-    }
+    for invoice in invoices:
+        if invoice.id == invoice_id:
+            return invoice
+    
+    return JSONResponse(
+        status_code=404,
+        content={"error": "Invoice not found"}
+    )
 
 
 # ── Error handlers ───────────────────────────────────────────────────────────

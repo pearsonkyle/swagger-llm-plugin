@@ -170,10 +170,32 @@
                 var schemaDef = mediaType.schema || {};
                 if (schemaDef && typeof schemaDef === 'object') {
                   lines.push('- Content-Type: `' + contentType + '`');
-                  if (schemaDef.type === 'object') {
-                    var props = schemaDef.properties || {};
-                    var propNames = Object.keys(props).slice(0, 5);
-                    lines.push('- Properties: ' + propNames.join(', ') + (Object.keys(props).length > 5 ? '...' : ''));
+                  // Resolve $ref to show actual schema properties
+                  var resolvedSchema = schemaDef;
+                  if (schemaDef['$ref'] && typeof schemaDef['$ref'] === 'string') {
+                    var refPath = schemaDef['$ref'].replace('#/components/schemas/', '');
+                    var compSchemas = (schema.components || {}).schemas || {};
+                    if (compSchemas[refPath]) {
+                      resolvedSchema = compSchemas[refPath];
+                      lines.push('- Schema: `' + refPath + '`');
+                    }
+                  }
+                  if (resolvedSchema.type === 'object' || resolvedSchema.properties) {
+                    var props = resolvedSchema.properties || {};
+                    var requiredFields = resolvedSchema.required || [];
+                    var propKeys = Object.keys(props).slice(0, 10);
+                    propKeys.forEach(function(pName) {
+                      var pDef = props[pName] || {};
+                      var pType = pDef.type || 'any';
+                      // Handle array types
+                      if (pType === 'array' && pDef.items) {
+                        var itemRef = (pDef.items['$ref'] || '').replace('#/components/schemas/', '');
+                        pType = 'array[' + (itemRef || pDef.items.type || 'object') + ']';
+                      }
+                      var pReq = requiredFields.indexOf(pName) >= 0 ? 'required' : 'optional';
+                      var pDesc = pDef.description || '';
+                      lines.push('  - `' + pName + '` (' + pType + ', ' + pReq + ')' + (pDesc ? ': ' + pDesc : ''));
+                    });
                   }
                 }
               });
@@ -264,14 +286,14 @@
   // ── Build API request tool definition for LLM tool calling ─────────────────
   function buildApiRequestTool(schema) {
     var endpoints = [];
-    var methodsEnum = new Set(['GET', 'POST']);
+    var methodsEnum = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
     var paths = schema.paths || {};
 
     Object.keys(paths).forEach(function(path) {
       var pathItem = paths[path];
       if (typeof pathItem !== 'object') return;
 
-      ['get', 'post'].forEach(function(method) {
+      ['get', 'post', 'put', 'patch', 'delete'].forEach(function(method) {
         if (!pathItem[method] || typeof pathItem[method] !== 'object') return;
 
         var op = pathItem[method];
@@ -320,7 +342,7 @@
             },
             body: {
               type: 'object',
-              description: 'JSON request body (for POST requests)',
+              description: 'JSON request body (for POST/PUT/PATCH requests)',
               additionalProperties: true
             }
           },
@@ -487,6 +509,23 @@
       localStorage.setItem(CHAT_HISTORY_KEY, JSON.stringify(messages.slice(-20)));
     } catch (e) {
       // ignore
+    }
+  }
+
+  function exportAsJson(data, filename) {
+    try {
+      var json = JSON.stringify(data, null, 2);
+      var blob = new Blob([json], { type: 'application/json' });
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = filename || 'export.json';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error('Failed to export:', e);
     }
   }
 
@@ -1037,7 +1076,6 @@
         this.renderToolCallPanel = this.renderToolCallPanel.bind(this);
         this._copyTimeoutId = null;
         this._fetchAbortController = null;
-        this._lastToolCallAssistantMsg = null;
 
         initMarked();
       }
@@ -1130,7 +1168,7 @@
         };
         try { executedArgs.query_params = JSON.parse(s.editQueryParams || '{}'); } catch (e) { executedArgs.query_params = {}; }
         try { executedArgs.path_params = JSON.parse(s.editPathParams || '{}'); } catch (e) { executedArgs.path_params = {}; }
-        if (s.editMethod === 'POST') {
+        if (s.editMethod === 'POST' || s.editMethod === 'PUT' || s.editMethod === 'PATCH') {
           try { executedArgs.body = JSON.parse(s.editBody || '{}'); } catch (e) { executedArgs.body = {}; }
         }
 
@@ -1180,15 +1218,18 @@
           fetchHeaders['Authorization'] = 'Bearer ' + toolApiKey;
         }
 
+        var hasBody = (s.editMethod === 'POST' || s.editMethod === 'PUT' || s.editMethod === 'PATCH') && s.editBody;
+        if (hasBody) {
+          fetchHeaders['Content-Type'] = 'application/json';
+        }
+
         var fetchOpts = {
           method: s.editMethod,
           headers: fetchHeaders,
         };
 
-        if (s.editMethod === 'POST') {
-          try {
-            fetchOpts.body = s.editBody;
-          } catch (e) {}
+        if (hasBody) {
+          fetchOpts.body = s.editBody;
         }
 
         self.setState({ toolCallResponse: { status: 'loading', body: '' } });
@@ -1572,7 +1613,6 @@
                           }),
                           messageId: streamMsgId
                         };
-                        self._lastToolCallAssistantMsg = assistantToolMsg;
                         self._pendingToolCallMsg = assistantToolMsg;
 
                         self.setState(function(prev) {
@@ -1602,6 +1642,9 @@
                       }
                     }
                   } catch (e) {
+                    if (typeof console !== 'undefined' && console && typeof console.error === 'function') {
+                      console.error('Error processing streaming chunk:', payloadData, e);
+                    }
                   }
                 }
 
@@ -1839,17 +1882,25 @@
             {
               className: "llm-chat-message " + (isUser ? 'user' : 'assistant'),
               onClick: function() { self.handleBubbleClick(msg.messageId, msg.content); },
-              style: { maxWidth: isUser ? "85%" : "90%", cursor: "pointer" }
+              style: { maxWidth: isUser ? "85%" : "90%", cursor: "pointer", position: "relative" }
             },
+            self.state.copiedId === msg.messageId
+              ? React.createElement("div", {
+                  style: {
+                    position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)",
+                    background: "rgba(16, 185, 129, 0.95)", color: "#fff", padding: "6px 16px",
+                    borderRadius: "6px", fontSize: "12px", fontWeight: "600", zIndex: 10,
+                    pointerEvents: "none", boxShadow: "0 2px 8px rgba(0,0,0,0.2)",
+                    animation: "llm-fade-in 0.15s ease"
+                  }
+                }, "✓ Copied!")
+              : null,
             React.createElement(
               "div",
               { className: "llm-chat-message-header" },
               isUser
                 ? null
-                : React.createElement("span", { className: "llm-assistant-label" }, "Assistant"),
-              self.state.copiedId === msg.messageId
-                ? React.createElement("span", { style: { fontSize: "11px", color: "#10b981", fontWeight: "500" } }, "✓ Copied")
-                : null
+                : React.createElement("span", { className: "llm-assistant-label" }, "Assistant")
             ),
             React.createElement(
               "div",
@@ -1927,7 +1978,10 @@
               React.createElement("div", { style: labelStyle }, "Method"),
               React.createElement("select", { value: s.editMethod, onChange: function(e) { self.setState({ editMethod: e.target.value }); }, style: inputStyle },
                 React.createElement("option", { value: "GET" }, "GET"),
-                React.createElement("option", { value: "POST" }, "POST")
+                React.createElement("option", { value: "POST" }, "POST"),
+                React.createElement("option", { value: "PUT" }, "PUT"),
+                React.createElement("option", { value: "PATCH" }, "PATCH"),
+                React.createElement("option", { value: "DELETE" }, "DELETE")
               )
             ),
             React.createElement(
@@ -1943,7 +1997,7 @@
               React.createElement("input", { type: "text", value: s.editQueryParams, onChange: function(e) { self.setState({ editQueryParams: e.target.value }); }, style: inputStyle, placeholder: '{}' })
             )
           ),
-          s.editMethod === 'POST' && React.createElement("div", { style: { marginBottom: "8px" } },
+          (s.editMethod === 'POST' || s.editMethod === 'PUT' || s.editMethod === 'PATCH') && React.createElement("div", { style: { marginBottom: "8px" } },
             React.createElement("div", { style: Object.assign({}, labelStyle, { display: "flex", alignItems: "center", justifyContent: "space-between" }) }, 
               "Body",
               React.createElement("span", { style: { fontSize: "10px", color: "var(--theme-text-secondary)", fontWeight: "400" } }, "JSON")
@@ -2007,13 +2061,30 @@
               "div",
               { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px' } },
               React.createElement(
-                "button",
-                {
-                  onClick: this.clearHistory,
-                  disabled: this.state.isTyping || this.state.isProcessingToolCall,
-                  style: { border: 'none', borderRadius: '6px', cursor: (this.state.isTyping || this.state.isProcessingToolCall) ? 'not-allowed' : 'pointer', fontSize: '12px', fontWeight: '500', transition: 'all 0.2s ease', background: (this.state.isTyping || this.state.isProcessingToolCall) ? 'var(--theme-accent)' : 'var(--theme-accent)', opacity: (this.state.isTyping || this.state.isProcessingToolCall) ? 0.6 : 1, color: '#fff', padding: '8px 12px' }
-                },
-                "Clear"
+                "div",
+                { style: { display: 'flex', gap: '8px' } },
+                React.createElement(
+                  "button",
+                  {
+                    onClick: this.clearHistory,
+                    disabled: this.state.isTyping || this.state.isProcessingToolCall,
+                    style: { border: 'none', borderRadius: '6px', cursor: (this.state.isTyping || this.state.isProcessingToolCall) ? 'not-allowed' : 'pointer', fontSize: '12px', fontWeight: '500', transition: 'all 0.2s ease', background: (this.state.isTyping || this.state.isProcessingToolCall) ? 'var(--theme-accent)' : 'var(--theme-accent)', opacity: (this.state.isTyping || this.state.isProcessingToolCall) ? 0.6 : 1, color: '#fff', padding: '8px 12px' }
+                  },
+                  "Clear"
+                ),
+                React.createElement(
+                  "button",
+                  {
+                    onClick: function() {
+                      var history = self.state.chatHistory || [];
+                      if (history.length === 0) return;
+                      exportAsJson(history, 'chat-history-' + new Date().toISOString().slice(0, 10) + '.json');
+                    },
+                    disabled: !(this.state.chatHistory && this.state.chatHistory.length > 0),
+                    style: { border: 'none', borderRadius: '6px', cursor: (this.state.chatHistory && this.state.chatHistory.length > 0) ? 'pointer' : 'not-allowed', fontSize: '12px', fontWeight: '500', transition: 'all 0.2s ease', background: 'var(--theme-secondary)', opacity: (this.state.chatHistory && this.state.chatHistory.length > 0) ? 1 : 0.5, color: 'var(--theme-text-primary)', padding: '8px 12px' }
+                  },
+                  "⬇ Export"
+                )
               ),
               React.createElement(
                 "div",
@@ -2765,10 +2836,669 @@
     '.llm-code-block-content code { font-family: "Consolas", "Monaco", monospace; }',
     '.llm-code-block-content pre { margin: 0; padding: 0; }',
     '.llm-code-block-content.json { color: #a5b4fc; }',
+    '@keyframes llm-fade-in { from { opacity: 0; transform: translate(-50%, -50%) scale(0.9); } to { opacity: 1; transform: translate(-50%, -50%) scale(1); } }',
 
   ].join('\n');
   
   injectStyles('swagger-llm-chat-styles', chatStyles);
+
+  // ── Workflow storage helpers ────────────────────────────────────────────────
+  var WORKFLOW_STORAGE_KEY = 'swagger-llm-workflow';
+
+  function loadWorkflow() {
+    try {
+      var data = localStorage.getItem(WORKFLOW_STORAGE_KEY);
+      if (data) return JSON.parse(data);
+    } catch (e) {}
+    return null;
+  }
+
+  function saveWorkflow(workflow) {
+    try {
+      localStorage.setItem(WORKFLOW_STORAGE_KEY, JSON.stringify(workflow));
+    } catch (e) {}
+  }
+
+  function createDefaultBlock() {
+    return {
+      id: generateMessageId(),
+      type: 'prompt',
+      content: '',
+      output: '',
+      status: 'idle'
+    };
+  }
+
+  // ── Workflow panel component ───────────────────────────────────────────────
+  function WorkflowPanelFactory(system) {
+    var React = system.React;
+
+    return class WorkflowPanel extends React.Component {
+      constructor(props) {
+        super(props);
+        var saved = loadWorkflow();
+        // Normalize persisted blocks to clear transient fields like output/status
+        var initialBlocks;
+        if (saved && saved.blocks && saved.blocks.length) {
+          initialBlocks = saved.blocks.map(function (block) {
+            return Object.assign({}, block, {
+              output: '',
+              status: 'idle'
+            });
+          });
+        } else {
+          initialBlocks = [createDefaultBlock()];
+        }
+        this.state = {
+          blocks: initialBlocks,
+          running: false,
+          currentBlockIdx: -1,
+          aborted: false,
+          copiedBlockId: null,
+        };
+        this._abortController = null;
+        this.handleStart = this.handleStart.bind(this);
+        this.handleStop = this.handleStop.bind(this);
+        this.handleReset = this.handleReset.bind(this);
+        this.handleAddBlock = this.handleAddBlock.bind(this);
+        this.handleRemoveBlock = this.handleRemoveBlock.bind(this);
+        this.handleBlockContentChange = this.handleBlockContentChange.bind(this);
+        this.runWorkflow = this.runWorkflow.bind(this);
+      }
+
+      componentDidUpdate(prevProps, prevState) {
+        if (prevState.blocks !== this.state.blocks && !this.state.running) {
+          var persistedBlocks = this.state.blocks.map(function(b) {
+            return { id: b.id, type: b.type, content: b.content };
+          });
+          saveWorkflow({ blocks: persistedBlocks });
+        }
+      }
+
+      componentWillUnmount() {
+        if (this._abortController) {
+          this._abortController.abort();
+          this._abortController = null;
+        }
+      }
+
+      handleAddBlock() {
+        this.setState(function(prev) {
+          return { blocks: prev.blocks.concat([createDefaultBlock()]) };
+        });
+      }
+
+      handleRemoveBlock(blockId) {
+        this.setState(function(prev) {
+          if (prev.blocks.length <= 1) return {};
+          return { blocks: prev.blocks.filter(function(b) { return b.id !== blockId; }) };
+        });
+      }
+
+      handleBlockContentChange(blockId, value) {
+        this.setState(function(prev) {
+          return {
+            blocks: prev.blocks.map(function(b) {
+              if (b.id === blockId) return Object.assign({}, b, { content: value });
+              return b;
+            })
+          };
+        });
+      }
+
+      handleStart() {
+        var self = this;
+        // Check if any block has content
+        var hasContent = self.state.blocks.some(function(b) { return b.content && b.content.trim(); });
+        if (!hasContent) return;
+        // Abort any existing in-flight request
+        if (self._abortController) {
+          self._abortController.abort();
+          self._abortController = null;
+        }
+        self.setState(function(prev) {
+          return {
+            running: true,
+            aborted: false,
+            currentBlockIdx: 0,
+            blocks: prev.blocks.map(function(b) {
+              return Object.assign({}, b, { output: '', status: 'idle' });
+            })
+          };
+        }, function() {
+          self.runWorkflow();
+        });
+      }
+
+      handleStop() {
+        if (this._abortController) {
+          this._abortController.abort();
+        }
+        this.setState({ running: false, aborted: true, currentBlockIdx: -1 });
+      }
+
+      handleReset() {
+        if (this._abortController) {
+          this._abortController.abort();
+        }
+        this.setState({
+          blocks: [createDefaultBlock()],
+          running: false,
+          currentBlockIdx: -1,
+          aborted: false,
+        });
+        saveWorkflow({ blocks: [createDefaultBlock()] });
+      }
+
+      runWorkflow() {
+        var self = this;
+        var previousOutput = '';
+
+        function runBlock(idx) {
+          var currentBlocks = self.state.blocks;
+          if (idx >= currentBlocks.length || self.state.aborted) {
+            self.setState({ running: false, currentBlockIdx: -1 });
+            return;
+          }
+
+          self.setState({ currentBlockIdx: idx });
+
+          var block = currentBlocks[idx];
+          var updatedBlocks = currentBlocks.slice();
+          updatedBlocks[idx] = Object.assign({}, updatedBlocks[idx], { status: 'running', output: '' });
+          self.setState({ blocks: updatedBlocks });
+
+          var prompt = block.content || '';
+          if (previousOutput) {
+            prompt = 'Previous step output:\n' + previousOutput + '\n\n' + prompt;
+          }
+
+          var settings = loadFromStorage();
+          var toolSettings = loadToolSettings();
+          var systemPrompt = 'You are a workflow assistant. Execute the user instructions step by step. Be concise in your responses.';
+
+          if (toolSettings.enableTools) {
+            systemPrompt += '\n\nYou have access to the `api_request` tool to execute API calls. Use it when the user asks to call an endpoint.';
+          }
+
+          var messages = [
+            { role: 'system', content: systemPrompt },
+            { role: 'user', content: prompt }
+          ];
+
+          var payload = {
+            messages: messages,
+            model: settings.modelId || 'llama3',
+            max_tokens: settings.maxTokens != null && settings.maxTokens !== '' ? parseInt(settings.maxTokens) : 4096,
+            temperature: settings.temperature != null && settings.temperature !== '' ? parseFloat(settings.temperature) : 0.7,
+            stream: true,
+          };
+
+          if (toolSettings.enableTools) {
+            var fullSchema = null;
+            try {
+              var storedSettings = loadFromStorage();
+              if (storedSettings.openapiSchema) fullSchema = storedSettings.openapiSchema;
+            } catch (e) {}
+            if (fullSchema) {
+              payload.tools = [buildApiRequestTool(fullSchema)];
+              payload.tool_choice = 'auto';
+            }
+          }
+
+          var fetchHeaders = { 'Content-Type': 'application/json' };
+          if (settings.apiKey) {
+            fetchHeaders['Authorization'] = 'Bearer ' + settings.apiKey;
+          }
+
+          var baseUrl = (settings.baseUrl || '').replace(/\/+$/, '');
+          // Abort any existing in-flight request before starting a new one
+          if (self._abortController && typeof self._abortController.abort === 'function') {
+            try { self._abortController.abort(); } catch (e) {}
+          }
+          self._abortController = new AbortController();
+          var accumulated = '';
+          var accumulatedToolCalls = {};
+
+          fetch(baseUrl + '/chat/completions', {
+            method: 'POST',
+            headers: fetchHeaders,
+            body: JSON.stringify(payload),
+            signal: self._abortController.signal
+          })
+            .then(function(res) {
+              if (!res.ok) {
+                return res.text().then(function(text) {
+                  throw new Error('HTTP ' + res.status + ': ' + res.statusText + (text ? ' - ' + text : ''));
+                });
+              }
+              var reader = res.body.getReader();
+              var decoder = new TextDecoder();
+              var buffer = '';
+
+              function processChunk() {
+                return reader.read().then(function(result) {
+                  if (self.state.aborted) return;
+                  if (result.done) {
+                    return finishBlock(accumulated);
+                  }
+
+                  buffer += decoder.decode(result.value, { stream: true });
+                  var lines = buffer.split('\n');
+                  buffer = lines.pop() || '';
+
+                  for (var i = 0; i < lines.length; i++) {
+                    var line = lines[i].trim();
+                    if (!line || !line.startsWith('data: ')) continue;
+                    var payloadData = line.substring(6);
+                    if (payloadData === '[DONE]') {
+                      return finishBlock(accumulated);
+                    }
+
+                    try {
+                      var chunk = JSON.parse(payloadData);
+                      if (chunk.error) {
+                        return finishBlock('Error: ' + chunk.error);
+                      }
+                      var choice = chunk.choices && chunk.choices[0];
+                      if (!choice) continue;
+
+                      if (choice.delta && choice.delta.content) {
+                        accumulated += choice.delta.content;
+                        var currentBlocks = self.state.blocks.slice();
+                        currentBlocks[idx] = Object.assign({}, currentBlocks[idx], { output: accumulated });
+                        self.setState({ blocks: currentBlocks });
+                      }
+
+                      if (choice.delta && choice.delta.tool_calls) {
+                        choice.delta.tool_calls.forEach(function(tc) {
+                          var tcIdx = tc.index != null ? tc.index : 0;
+                          if (!accumulatedToolCalls[tcIdx]) {
+                            accumulatedToolCalls[tcIdx] = { id: '', function: { name: '', arguments: '' } };
+                          }
+                          if (tc.id) accumulatedToolCalls[tcIdx].id = tc.id;
+                          if (tc.function) {
+                            if (tc.function.name) accumulatedToolCalls[tcIdx].function.name = tc.function.name;
+                            if (tc.function.arguments) accumulatedToolCalls[tcIdx].function.arguments += tc.function.arguments;
+                          }
+                        });
+                      }
+
+                      if (choice.finish_reason === 'tool_calls') {
+                        var toolCallsList = Object.keys(accumulatedToolCalls).map(function(k) {
+                          return accumulatedToolCalls[k];
+                        });
+                        if (toolCallsList.length > 0) {
+                          executeToolCall(toolCallsList[0], idx, messages, function(toolOutput) {
+                            var firstToolCall = toolCallsList[0];
+                            var tcArgs = {};
+                            try { tcArgs = JSON.parse(firstToolCall.function.arguments || '{}'); } catch (e) {}
+                            var curlCmd = buildCurlCommand(
+                              tcArgs.method || 'GET',
+                              tcArgs.path || '',
+                              tcArgs.query_params || {},
+                              tcArgs.path_params || {},
+                              tcArgs.body || {}
+                            );
+                            accumulated += '\n\n[Tool Call]\n' + curlCmd + '\n\n[Tool Result]\n' + toolOutput;
+                            var currentBlocks2 = self.state.blocks.slice();
+                            currentBlocks2[idx] = Object.assign({}, currentBlocks2[idx], { output: accumulated });
+                            self.setState({ blocks: currentBlocks2 });
+                            finishBlock(accumulated);
+                          });
+                          return;
+                        }
+                      }
+                    } catch (e) {
+                      console.error('Error processing streaming chunk:', payloadData, e);
+                    }
+                  }
+
+                  return processChunk();
+                });
+              }
+
+              return processChunk();
+            })
+            .catch(function(err) {
+              if (err && err.name === 'AbortError') {
+                self._abortController = null;
+                return;
+              }
+              finishBlock('Error: ' + (err && err.message ? err.message : 'Request failed'));
+            });
+
+          function executeToolCall(tc, blockIdx, currentMessages, callback) {
+            var args = {};
+            try { args = JSON.parse(tc.function.arguments || '{}'); } catch (e) {}
+            var method = args.method || 'GET';
+            var url = args.path || '';
+
+            try {
+              var pathParams = args.path_params || {};
+              Object.keys(pathParams).forEach(function(key) {
+                url = url.replace('{' + key + '}', encodeURIComponent(pathParams[key]));
+              });
+            } catch (e) {}
+
+            try {
+              var queryParams = args.query_params || {};
+              var queryKeys = Object.keys(queryParams);
+              if (queryKeys.length > 0) {
+                var qs = queryKeys.map(function(k) {
+                  return encodeURIComponent(k) + '=' + encodeURIComponent(queryParams[k]);
+                }).join('&');
+                url += (url.indexOf('?') >= 0 ? '&' : '?') + qs;
+              }
+            } catch (e) {}
+
+            var toolFetchHeaders = {};
+            var tSettings = loadToolSettings();
+            var toolApiKey = tSettings.apiKey && typeof tSettings.apiKey === 'string' ? tSettings.apiKey.trim() : '';
+            if (toolApiKey) {
+              toolFetchHeaders['Authorization'] = 'Bearer ' + toolApiKey;
+            }
+
+            var hasBody = args.body && (method === 'POST' || method === 'PUT' || method === 'PATCH');
+            if (hasBody) {
+              toolFetchHeaders['Content-Type'] = 'application/json';
+            }
+
+            var fetchOpts = { method: method, headers: toolFetchHeaders };
+            if (hasBody) {
+              fetchOpts.body = JSON.stringify(args.body);
+            }
+            // Respect abort signal for tool calls
+            if (self._abortController) {
+              fetchOpts.signal = self._abortController.signal;
+            }
+
+            fetch(url, fetchOpts)
+              .then(function(res) {
+                if (self.state.aborted) return;
+                return res.text().then(function(text) {
+                  if (self.state.aborted) return;
+                  callback('Status: ' + res.status + ' ' + res.statusText + '\n\n' + text.substring(0, 4000));
+                });
+              })
+              .catch(function(err) {
+                if (err && err.name === 'AbortError') return;
+                callback('Error: ' + err.message);
+              });
+          }
+
+          function finishBlock(output) {
+            var currentBlocks = self.state.blocks.slice();
+            currentBlocks[idx] = Object.assign({}, currentBlocks[idx], {
+              output: output || '(no output)',
+              status: 'done'
+            });
+            // Update previousOutput for chaining into next block
+            previousOutput = output || '';
+            self.setState({ blocks: currentBlocks }, function() {
+              runBlock(idx + 1);
+            });
+          }
+        }
+
+        runBlock(0);
+      }
+
+      render() {
+        var React = system.React;
+        var self = this;
+        var s = this.state;
+
+        var containerStyle = {
+          display: 'flex',
+          flexDirection: 'column',
+          height: '100%',
+          fontFamily: "'Inter', 'Segoe UI', sans-serif",
+          overflow: 'hidden',
+        };
+
+        var toolbarStyle = {
+          display: 'flex',
+          gap: '8px',
+          padding: '12px 16px',
+          borderBottom: '1px solid var(--theme-border-color)',
+          background: 'var(--theme-panel-bg)',
+          flexShrink: 0,
+          flexWrap: 'wrap',
+          alignItems: 'center',
+        };
+
+        var btnStyle = function(color) {
+          return {
+            background: color || 'var(--theme-primary)',
+            color: '#fff',
+            border: 'none',
+            borderRadius: '4px',
+            padding: '6px 14px',
+            cursor: 'pointer',
+            fontSize: '12px',
+            fontWeight: '500',
+            transition: 'all 0.2s ease',
+          };
+        };
+
+        var blocksContainerStyle = {
+          flex: 1,
+          overflowY: 'auto',
+          padding: '16px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '12px',
+        };
+
+        var hasContent = s.blocks.some(function(b) { return b.content && b.content.trim(); });
+        var startDisabled = s.running || !hasContent;
+
+        return React.createElement(
+          'div',
+          { style: containerStyle },
+          // Toolbar
+          React.createElement(
+            'div',
+            { style: toolbarStyle },
+            React.createElement('button', {
+              onClick: self.handleStart,
+              disabled: startDisabled,
+              style: Object.assign({}, btnStyle('#10b981'), startDisabled ? { opacity: 0.5, cursor: 'not-allowed' } : {})
+            }, '▶ Start'),
+            React.createElement('button', {
+              onClick: self.handleStop,
+              disabled: !s.running,
+              style: Object.assign({}, btnStyle('#ef4444'), !s.running ? { opacity: 0.5, cursor: 'not-allowed' } : {})
+            }, '■ Stop'),
+            React.createElement('button', {
+              onClick: self.handleReset,
+              style: btnStyle('var(--theme-accent)')
+            }, '↺ Reset'),
+            React.createElement('div', { style: { width: '1px', height: '24px', background: 'var(--theme-border-color)' } }),
+            React.createElement('button', {
+              onClick: self.handleAddBlock,
+              disabled: s.running,
+              style: Object.assign({}, btnStyle('var(--theme-primary)'), s.running ? { opacity: 0.5, cursor: 'not-allowed' } : {})
+            }, '+ Add Block'),
+            React.createElement('button', {
+              onClick: function() {
+                var blocks = self.state.blocks || [];
+                if (blocks.length === 0) return;
+                var exportData = blocks.map(function(b, i) {
+                  return { block: i + 1, prompt: b.content || '', output: b.output || '', status: b.status || 'idle' };
+                });
+                exportAsJson(exportData, 'workflow-' + new Date().toISOString().slice(0, 10) + '.json');
+              },
+              disabled: s.running || !hasContent,
+              style: Object.assign({}, btnStyle('var(--theme-secondary)'), { color: 'var(--theme-text-primary)' }, (s.running || !hasContent) ? { opacity: 0.5, cursor: 'not-allowed' } : {})
+            }, '⬇ Export'),
+            s.running ? React.createElement('span', {
+              style: { fontSize: '12px', color: 'var(--theme-text-secondary)', marginLeft: 'auto' }
+            }, 'Running block ' + (s.currentBlockIdx + 1) + ' of ' + s.blocks.length + '…') : null
+          ),
+          // Blocks
+          React.createElement(
+            'div',
+            { style: blocksContainerStyle },
+            s.blocks.length === 0
+              ? React.createElement('div', {
+                  style: { textAlign: 'center', color: 'var(--theme-text-secondary)', padding: '40px', fontSize: '14px' }
+                }, 'No blocks yet. Click "+ Add Block" to get started.')
+              : s.blocks.map(function(block, idx) {
+                  var isActive = s.running && s.currentBlockIdx === idx;
+                  var isDone = block.status === 'done';
+
+                  var blockWrapperStyle = {
+                    background: 'var(--theme-input-bg)',
+                    border: '1px solid ' + (isActive ? 'var(--theme-primary)' : 'var(--theme-border-color)'),
+                    borderRadius: '8px',
+                    overflow: 'hidden',
+                    transition: 'all 0.2s ease',
+                    boxShadow: isActive ? '0 0 0 2px rgba(99,102,241,0.2)' : 'none',
+                  };
+
+                  var blockHeaderStyle = {
+                    display: 'flex',
+                    justifyContent: 'space-between',
+                    alignItems: 'center',
+                    padding: '8px 12px',
+                    background: isActive ? 'var(--theme-primary)' : 'var(--theme-panel-bg)',
+                    borderBottom: '1px solid var(--theme-border-color)',
+                    transition: 'all 0.2s ease',
+                  };
+
+                  var statusBadge = null;
+                  if (block.status === 'running') {
+                    statusBadge = React.createElement('span', {
+                      style: { fontSize: '10px', fontWeight: '600', color: '#fff', background: '#f59e0b', padding: '2px 8px', borderRadius: '4px' }
+                    }, 'RUNNING');
+                  } else if (block.status === 'done') {
+                    statusBadge = React.createElement('span', {
+                      style: { fontSize: '10px', fontWeight: '600', color: '#fff', background: '#10b981', padding: '2px 8px', borderRadius: '4px' }
+                    }, 'DONE');
+                  }
+
+                  return React.createElement(
+                    'div',
+                    { key: block.id, style: blockWrapperStyle },
+                    // Block header
+                    React.createElement(
+                      'div',
+                      { style: blockHeaderStyle },
+                      React.createElement(
+                        'div',
+                        { style: { display: 'flex', alignItems: 'center', gap: '8px' } },
+                        React.createElement('span', {
+                          style: {
+                            color: isActive ? '#fff' : 'var(--theme-text-secondary)',
+                            fontSize: '10px',
+                            fontFamily: "'Inter', sans-serif",
+                            fontWeight: '600',
+                            textTransform: 'uppercase',
+                          }
+                        }, 'Block ' + (idx + 1)),
+                        statusBadge
+                      ),
+                      !s.running ? React.createElement('button', {
+                        onClick: function() { self.handleRemoveBlock(block.id); },
+                        style: {
+                          background: 'transparent',
+                          border: 'none',
+                          color: isActive ? '#fff' : 'var(--theme-text-secondary)',
+                          cursor: 'pointer',
+                          fontSize: '14px',
+                          padding: '2px 6px',
+                          borderRadius: '4px',
+                        },
+                        title: 'Remove block'
+                      }, '✕') : null
+                    ),
+                    // Block content textarea
+                    React.createElement('textarea', {
+                      value: block.content,
+                      onChange: function(e) { self.handleBlockContentChange(block.id, e.target.value); },
+                      disabled: s.running,
+                      placeholder: 'Enter a prompt, query, or instruction for this step…',
+                      style: {
+                        width: '100%',
+                        boxSizing: 'border-box',
+                        background: 'var(--theme-input-bg)',
+                        color: 'var(--theme-text-primary)',
+                        border: 'none',
+                        borderBottom: block.output ? '1px solid var(--theme-border-color)' : 'none',
+                        padding: '12px',
+                        fontSize: '13px',
+                        fontFamily: "'Consolas', 'Monaco', monospace",
+                        resize: 'vertical',
+                        minHeight: '72px',
+                        lineHeight: '1.6',
+                        outline: 'none',
+                      }
+                    }),
+                    // Block output
+                    block.output ? React.createElement(
+                      'div',
+                      {
+                        style: {
+                          padding: '0',
+                          margin: 0,
+                          overflowX: 'auto',
+                          whiteSpace: 'pre-wrap',
+                          wordBreak: 'break-all',
+                          cursor: 'pointer',
+                          position: 'relative',
+                        },
+                        onClick: function() {
+                          copyToClipboard(block.output).then(function(copied) {
+                            if (copied) {
+                              self.setState({ copiedBlockId: block.id });
+                              setTimeout(function() {
+                                self.setState({ copiedBlockId: null });
+                              }, 1500);
+                            }
+                          });
+                        },
+                        title: 'Click to copy output'
+                      },
+                      s.copiedBlockId === block.id
+                        ? React.createElement('div', {
+                            style: {
+                              position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+                              background: 'rgba(16, 185, 129, 0.95)', color: '#fff', padding: '6px 16px',
+                              borderRadius: '6px', fontSize: '12px', fontWeight: '600', zIndex: 10,
+                              pointerEvents: 'none', boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
+                              animation: 'llm-fade-in 0.15s ease'
+                            }
+                          }, '✓ Copied!')
+                        : null,
+                      React.createElement(
+                        'pre',
+                        {
+                          style: {
+                            padding: '12px',
+                            margin: 0,
+                            overflowX: 'auto',
+                            whiteSpace: 'pre-wrap',
+                            wordBreak: 'break-all',
+                            color: isDone ? '#a5b4fc' : 'var(--theme-text-primary)',
+                            lineHeight: '1.6',
+                            fontSize: '13px',
+                            fontFamily: "'Consolas', 'Monaco', monospace",
+                            maxHeight: '300px',
+                            overflowY: 'auto',
+                          }
+                        },
+                        React.createElement('code', null, block.output)
+                      )
+                    ) : null
+                  );
+                })
+          )
+        );
+      }
+    };
+  }
 
   // ── Plugin definition ───────────────────────────────────────────────────────
   window.LLMSettingsPlugin = function (system) {
@@ -2783,6 +3513,7 @@
       components: {
         LLMSettingsPanel: LLMSettingsPanelFactory(system),
         ChatPanel: ChatPanelFactory(system),
+        WorkflowPanel: WorkflowPanelFactory(system),
       },
     };
   };

@@ -14,6 +14,7 @@
       var BaseLayout = system.getComponent("BaseLayout", true);
       var LLMSettingsPanel = system.getComponent("LLMSettingsPanel", true);
       var ChatPanel = system.getComponent("ChatPanel", true);
+      var WorkflowPanel = system.getComponent("WorkflowPanel", true);
 
       // Get saved tab preference, default to "api"
       var savedTab = localStorage.getItem(TAB_STORAGE_KEY) || "api";
@@ -57,8 +58,8 @@
         };
       };
 
-      // Content area style - full height for chat and settings
-      var isContained = activeTab === "chat" || activeTab === "settings";
+      // Content area style - full height for chat, settings, and workflow
+      var isContained = activeTab === "chat" || activeTab === "settings" || activeTab === "workflow";
       var contentStyle = {
         border: "1px solid var(--theme-border-color)",
         borderTop: "none",
@@ -66,14 +67,15 @@
         background: "var(--theme-header-bg)",
         height: isContained ? "calc(100vh - 120px)" : "auto",
         minHeight: isContained ? "400px" : "auto",
-        overflow: activeTab === "chat" ? "hidden" : (activeTab === "settings" ? "auto" : "auto"),
-        overscrollBehavior: "contain",
+        overflow: isContained ? (activeTab === "chat" ? "hidden" : "auto") : "auto",
+        flex: isContained ? "none" : "1 1 auto",
+        overscrollBehavior: isContained ? "contain" : "auto",
         WebkitOverflowScrolling: "touch",
       };
 
       return React.createElement(
         "div",
-        { style: { display: "flex", flexDirection: "column", height: "100%" } },
+        { style: { display: "flex", flexDirection: "column", height: isContained ? "100%" : "auto" } },
         // Tab navigation bar
         React.createElement(
           "div",
@@ -106,6 +108,12 @@
               "button",
               { onClick: function () { setActiveTab("settings"); }, style: tabStyle("settings") },
               "Settings"
+            ),
+            // Workflow tab
+            React.createElement(
+              "button",
+              { onClick: function () { setActiveTab("workflow"); }, style: tabStyle("workflow") },
+              "Workflow"
             )
           )
         ),
@@ -121,7 +129,10 @@
           activeTab === "chat" ? React.createElement(ChatPanel, null) : null,
           
           // LLM Settings tab content
-          activeTab === "settings" ? React.createElement(LLMSettingsPanel, null) : null
+          activeTab === "settings" ? React.createElement(LLMSettingsPanel, null) : null,
+
+          // Workflow tab content
+          activeTab === "workflow" ? React.createElement(WorkflowPanel, null) : null
         )
       );
     }

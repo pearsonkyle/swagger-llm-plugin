@@ -748,3 +748,203 @@ def test_chat_height_calculation():
     js_content = client.get("/swagger-llm-static/llm-layout-plugin.js").text
     
     assert "calc(100vh" in js_content or "height:" in js_content.lower()
+
+
+# ── Workflow tab tests ─────────────────────────────────────────────────────
+
+
+def test_workflow_tab_in_layout():
+    """Verify layout plugin has Workflow tab."""
+    client = TestClient(make_app())
+
+    js_content = client.get("/swagger-llm-static/llm-layout-plugin.js").text
+
+    assert "workflow" in js_content.lower()
+    assert "WorkflowPanel" in js_content
+
+
+def test_workflow_panel_component():
+    """Verify WorkflowPanel component is included."""
+    client = TestClient(make_app())
+
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+
+    assert "WorkflowPanel" in js_content
+    assert "WorkflowPanelFactory" in js_content
+
+
+def test_workflow_panel_controls():
+    """Verify workflow panel has start/stop/reset buttons."""
+    client = TestClient(make_app())
+
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+
+    assert "handleStart" in js_content
+    assert "handleStop" in js_content
+    assert "handleReset" in js_content
+
+
+def test_workflow_panel_block_management():
+    """Verify workflow panel has add/remove block functionality."""
+    client = TestClient(make_app())
+
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+
+    assert "handleAddBlock" in js_content
+    assert "handleRemoveBlock" in js_content
+
+
+def test_workflow_panel_block_output():
+    """Verify workflow panel displays block outputs."""
+    client = TestClient(make_app())
+
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+
+    assert "output" in js_content
+    assert "runWorkflow" in js_content
+
+
+def test_workflow_panel_block_chaining():
+    """Verify workflow panel feeds output of each block into the next."""
+    client = TestClient(make_app())
+
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+
+    assert "previousOutput" in js_content
+    assert "Previous step output" in js_content
+
+
+def test_workflow_panel_tool_execution():
+    """Verify workflow panel supports LLM tool execution in blocks."""
+    client = TestClient(make_app())
+
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+
+    assert "executeToolCall" in js_content
+    assert "tool_calls" in js_content
+    assert "Tool Result" in js_content
+
+
+def test_workflow_storage_key():
+    """Verify correct localStorage key for workflow."""
+    client = TestClient(make_app())
+
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+
+    assert "swagger-llm-workflow" in js_content
+
+
+def test_workflow_styles_injected():
+    """Verify workflow panel uses theme-aware CSS variables."""
+    client = TestClient(make_app())
+
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+
+    assert "llm-workflow" in js_content
+    assert "var(--theme-border-color)" in js_content
+    assert "var(--theme-primary)" in js_content
+
+
+def test_export_function_exists():
+    """Verify exportAsJson utility function exists in settings plugin."""
+    client = TestClient(make_app())
+
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+
+    assert "exportAsJson" in js_content
+    assert "application/json" in js_content
+    assert "createObjectURL" in js_content
+
+
+def test_chat_export_button():
+    """Verify Chat panel has an Export button."""
+    client = TestClient(make_app())
+
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+
+    assert "chat-history-" in js_content
+    assert "Export" in js_content
+
+
+def test_workflow_export_button():
+    """Verify Workflow panel has an Export button."""
+    client = TestClient(make_app())
+
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+
+    assert "workflow-" in js_content
+
+
+def test_copy_feedback_indicator():
+    """Verify copied feedback overlay is present in chat and workflow."""
+    client = TestClient(make_app())
+
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+
+    assert "Copied!" in js_content
+    assert "llm-fade-in" in js_content
+    assert "copiedBlockId" in js_content
+
+
+def test_api_request_tool_supports_all_methods():
+    """Verify buildApiRequestTool includes PUT/PATCH/DELETE in addition to GET/POST."""
+    client = TestClient(make_app())
+
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+
+    assert "'GET', 'POST', 'PUT', 'PATCH', 'DELETE'" in js_content
+    assert "'get', 'post', 'put', 'patch', 'delete'" in js_content
+
+
+def test_workflow_tool_call_shows_curl():
+    """Verify workflow tool calls display curl command in output."""
+    client = TestClient(make_app())
+
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+
+    assert "Tool Call" in js_content
+    assert "buildCurlCommand" in js_content
+
+
+def test_api_tab_scroll_not_constrained():
+    """Verify API tab does not have overscrollBehavior contain that blocks scrolling."""
+    client = TestClient(make_app())
+
+    js_content = client.get("/swagger-llm-static/llm-layout-plugin.js").text
+
+    # API tab should not have fixed height or overscroll contain
+    assert 'isContained ? "contain" : "auto"' in js_content
+
+
+def test_tool_call_post_content_type():
+    """Verify POST/PUT/PATCH tool calls set Content-Type: application/json header."""
+    client = TestClient(make_app())
+
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+
+    # handleExecuteToolCall should set Content-Type for body-bearing methods
+    assert "fetchHeaders['Content-Type'] = 'application/json'" in js_content
+    # Body should be included for POST, PUT, and PATCH
+    assert "s.editMethod === 'POST' || s.editMethod === 'PUT' || s.editMethod === 'PATCH'" in js_content
+
+
+def test_tool_call_panel_all_methods():
+    """Verify tool call panel shows all HTTP methods in the dropdown."""
+    client = TestClient(make_app())
+
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+
+    for method in ["GET", "POST", "PUT", "PATCH", "DELETE"]:
+        assert 'value: "' + method + '"' in js_content
+
+
+def test_request_body_schema_ref_resolution():
+    """Verify request body $ref schemas are resolved in system prompt."""
+    client = TestClient(make_app())
+
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+
+    # Should resolve $ref to show schema name and properties
+    assert "refPath" in js_content
+    assert "components/schemas" in js_content
+    assert "resolvedSchema" in js_content

@@ -102,6 +102,7 @@ async def create_invoice(invoice_data: CreateInvoice):
     new_invoice = Invoice(
         id=invoice_counter,
         created_at=date.today(),
+        total_amount=total,
         **invoice_data.model_dump()
     )
     

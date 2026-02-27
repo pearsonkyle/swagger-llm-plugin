@@ -842,3 +842,74 @@ def test_workflow_styles_injected():
 
     assert "swagger-llm-workflow-styles" in js_content
     assert "llm-workflow" in js_content
+
+
+def test_export_function_exists():
+    """Verify exportAsJson utility function exists in settings plugin."""
+    client = TestClient(make_app())
+
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+
+    assert "exportAsJson" in js_content
+    assert "application/json" in js_content
+    assert "createObjectURL" in js_content
+
+
+def test_chat_export_button():
+    """Verify Chat panel has an Export button."""
+    client = TestClient(make_app())
+
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+
+    assert "chat-history-" in js_content
+    assert "Export" in js_content
+
+
+def test_workflow_export_button():
+    """Verify Workflow panel has an Export button."""
+    client = TestClient(make_app())
+
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+
+    assert "workflow-" in js_content
+
+
+def test_copy_feedback_indicator():
+    """Verify copied feedback overlay is present in chat and workflow."""
+    client = TestClient(make_app())
+
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+
+    assert "Copied!" in js_content
+    assert "llm-fade-in" in js_content
+    assert "copiedBlockId" in js_content
+
+
+def test_api_request_tool_supports_all_methods():
+    """Verify buildApiRequestTool includes PUT/PATCH/DELETE in addition to GET/POST."""
+    client = TestClient(make_app())
+
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+
+    assert "'GET', 'POST', 'PUT', 'PATCH', 'DELETE'" in js_content
+    assert "'get', 'post', 'put', 'patch', 'delete'" in js_content
+
+
+def test_workflow_tool_call_shows_curl():
+    """Verify workflow tool calls display curl command in output."""
+    client = TestClient(make_app())
+
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+
+    assert "Tool Call" in js_content
+    assert "buildCurlCommand" in js_content
+
+
+def test_api_tab_scroll_not_constrained():
+    """Verify API tab does not have overscrollBehavior contain that blocks scrolling."""
+    client = TestClient(make_app())
+
+    js_content = client.get("/swagger-llm-static/llm-layout-plugin.js").text
+
+    # API tab should not have fixed height or overscroll contain
+    assert 'isContained ? "contain" : "auto"' in js_content

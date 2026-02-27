@@ -264,14 +264,14 @@
   // ── Build API request tool definition for LLM tool calling ─────────────────
   function buildApiRequestTool(schema) {
     var endpoints = [];
-    var methodsEnum = new Set(['GET', 'POST']);
+    var methodsEnum = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
     var paths = schema.paths || {};
 
     Object.keys(paths).forEach(function(path) {
       var pathItem = paths[path];
       if (typeof pathItem !== 'object') return;
 
-      ['get', 'post'].forEach(function(method) {
+      ['get', 'post', 'put', 'patch', 'delete'].forEach(function(method) {
         if (!pathItem[method] || typeof pathItem[method] !== 'object') return;
 
         var op = pathItem[method];
@@ -320,7 +320,7 @@
             },
             body: {
               type: 'object',
-              description: 'JSON request body (for POST requests)',
+              description: 'JSON request body (for POST/PUT/PATCH requests)',
               additionalProperties: true
             }
           },
@@ -487,6 +487,23 @@
       localStorage.setItem(CHAT_HISTORY_KEY, JSON.stringify(messages.slice(-20)));
     } catch (e) {
       // ignore
+    }
+  }
+
+  function exportAsJson(data, filename) {
+    try {
+      var json = JSON.stringify(data, null, 2);
+      var blob = new Blob([json], { type: 'application/json' });
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = filename || 'export.json';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error('Failed to export:', e);
     }
   }
 
@@ -1185,7 +1202,7 @@
           headers: fetchHeaders,
         };
 
-        if (s.editMethod === 'POST') {
+        if (s.editMethod === 'POST' || s.editMethod === 'PUT' || s.editMethod === 'PATCH') {
           try {
             fetchOpts.body = s.editBody;
           } catch (e) {}
@@ -1839,17 +1856,25 @@
             {
               className: "llm-chat-message " + (isUser ? 'user' : 'assistant'),
               onClick: function() { self.handleBubbleClick(msg.messageId, msg.content); },
-              style: { maxWidth: isUser ? "85%" : "90%", cursor: "pointer" }
+              style: { maxWidth: isUser ? "85%" : "90%", cursor: "pointer", position: "relative" }
             },
+            self.state.copiedId === msg.messageId
+              ? React.createElement("div", {
+                  style: {
+                    position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)",
+                    background: "rgba(16, 185, 129, 0.95)", color: "#fff", padding: "6px 16px",
+                    borderRadius: "6px", fontSize: "12px", fontWeight: "600", zIndex: 10,
+                    pointerEvents: "none", boxShadow: "0 2px 8px rgba(0,0,0,0.2)",
+                    animation: "llm-fade-in 0.15s ease"
+                  }
+                }, "✓ Copied!")
+              : null,
             React.createElement(
               "div",
               { className: "llm-chat-message-header" },
               isUser
                 ? null
-                : React.createElement("span", { className: "llm-assistant-label" }, "Assistant"),
-              self.state.copiedId === msg.messageId
-                ? React.createElement("span", { style: { fontSize: "11px", color: "#10b981", fontWeight: "500" } }, "✓ Copied")
-                : null
+                : React.createElement("span", { className: "llm-assistant-label" }, "Assistant")
             ),
             React.createElement(
               "div",
@@ -2007,13 +2032,30 @@
               "div",
               { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px' } },
               React.createElement(
-                "button",
-                {
-                  onClick: this.clearHistory,
-                  disabled: this.state.isTyping || this.state.isProcessingToolCall,
-                  style: { border: 'none', borderRadius: '6px', cursor: (this.state.isTyping || this.state.isProcessingToolCall) ? 'not-allowed' : 'pointer', fontSize: '12px', fontWeight: '500', transition: 'all 0.2s ease', background: (this.state.isTyping || this.state.isProcessingToolCall) ? 'var(--theme-accent)' : 'var(--theme-accent)', opacity: (this.state.isTyping || this.state.isProcessingToolCall) ? 0.6 : 1, color: '#fff', padding: '8px 12px' }
-                },
-                "Clear"
+                "div",
+                { style: { display: 'flex', gap: '8px' } },
+                React.createElement(
+                  "button",
+                  {
+                    onClick: this.clearHistory,
+                    disabled: this.state.isTyping || this.state.isProcessingToolCall,
+                    style: { border: 'none', borderRadius: '6px', cursor: (this.state.isTyping || this.state.isProcessingToolCall) ? 'not-allowed' : 'pointer', fontSize: '12px', fontWeight: '500', transition: 'all 0.2s ease', background: (this.state.isTyping || this.state.isProcessingToolCall) ? 'var(--theme-accent)' : 'var(--theme-accent)', opacity: (this.state.isTyping || this.state.isProcessingToolCall) ? 0.6 : 1, color: '#fff', padding: '8px 12px' }
+                  },
+                  "Clear"
+                ),
+                React.createElement(
+                  "button",
+                  {
+                    onClick: function() {
+                      var history = self.state.chatHistory || [];
+                      if (history.length === 0) return;
+                      exportAsJson(history, 'chat-history-' + new Date().toISOString().slice(0, 10) + '.json');
+                    },
+                    disabled: !(this.state.chatHistory && this.state.chatHistory.length > 0),
+                    style: { border: 'none', borderRadius: '6px', cursor: (this.state.chatHistory && this.state.chatHistory.length > 0) ? 'pointer' : 'not-allowed', fontSize: '12px', fontWeight: '500', transition: 'all 0.2s ease', background: 'var(--theme-secondary)', opacity: (this.state.chatHistory && this.state.chatHistory.length > 0) ? 1 : 0.5, color: 'var(--theme-text-primary)', padding: '8px 12px' }
+                  },
+                  "⬇ Export"
+                )
               ),
               React.createElement(
                 "div",
@@ -2765,6 +2807,7 @@
     '.llm-code-block-content code { font-family: "Consolas", "Monaco", monospace; }',
     '.llm-code-block-content pre { margin: 0; padding: 0; }',
     '.llm-code-block-content.json { color: #a5b4fc; }',
+    '@keyframes llm-fade-in { from { opacity: 0; transform: translate(-50%, -50%) scale(0.9); } to { opacity: 1; transform: translate(-50%, -50%) scale(1); } }',
 
   ].join('\n');
   
@@ -2822,6 +2865,7 @@
           running: false,
           currentBlockIdx: -1,
           aborted: false,
+          copiedBlockId: null,
         };
         this._abortController = null;
         this.handleStart = this.handleStart.bind(this);
@@ -3057,7 +3101,17 @@
                         });
                         if (toolCallsList.length > 0) {
                           executeToolCall(toolCallsList[0], idx, messages, function(toolOutput) {
-                            accumulated += '\n\n[Tool Result]\n' + toolOutput;
+                            var tc0 = toolCallsList[0];
+                            var tcArgs = {};
+                            try { tcArgs = JSON.parse(tc0.function.arguments || '{}'); } catch (e) {}
+                            var curlCmd = buildCurlCommand(
+                              tcArgs.method || 'GET',
+                              tcArgs.path || '',
+                              tcArgs.query_params || {},
+                              tcArgs.path_params || {},
+                              tcArgs.body || {}
+                            );
+                            accumulated += '\n\n[Tool Call]\n' + curlCmd + '\n\n[Tool Result]\n' + toolOutput;
                             var currentBlocks2 = self.state.blocks.slice();
                             currentBlocks2[idx] = Object.assign({}, currentBlocks2[idx], { output: accumulated });
                             self.setState({ blocks: currentBlocks2 });
@@ -3238,6 +3292,18 @@
               disabled: s.running,
               style: Object.assign({}, btnStyle('var(--theme-primary)'), s.running ? { opacity: 0.5, cursor: 'not-allowed' } : {})
             }, '+ Add Block'),
+            React.createElement('button', {
+              onClick: function() {
+                var blocks = self.state.blocks || [];
+                if (blocks.length === 0) return;
+                var exportData = blocks.map(function(b, i) {
+                  return { block: i + 1, prompt: b.content || '', output: b.output || '', status: b.status || 'idle' };
+                });
+                exportAsJson(exportData, 'workflow-' + new Date().toISOString().slice(0, 10) + '.json');
+              },
+              disabled: s.running || !hasContent,
+              style: Object.assign({}, btnStyle('var(--theme-secondary)'), { color: 'var(--theme-text-primary)' }, (s.running || !hasContent) ? { opacity: 0.5, cursor: 'not-allowed' } : {})
+            }, '⬇ Export'),
             s.running ? React.createElement('span', {
               style: { fontSize: '12px', color: 'var(--theme-text-secondary)', marginLeft: 'auto' }
             }, 'Running block ' + (s.currentBlockIdx + 1) + ' of ' + s.blocks.length + '…') : null
@@ -3352,12 +3418,31 @@
                           whiteSpace: 'pre-wrap',
                           wordBreak: 'break-all',
                           cursor: 'pointer',
+                          position: 'relative',
                         },
                         onClick: function() {
-                          copyToClipboard(block.output);
+                          copyToClipboard(block.output).then(function(copied) {
+                            if (copied) {
+                              self.setState({ copiedBlockId: block.id });
+                              setTimeout(function() {
+                                self.setState({ copiedBlockId: null });
+                              }, 1500);
+                            }
+                          });
                         },
                         title: 'Click to copy output'
                       },
+                      s.copiedBlockId === block.id
+                        ? React.createElement('div', {
+                            style: {
+                              position: 'absolute', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+                              background: 'rgba(16, 185, 129, 0.95)', color: '#fff', padding: '6px 16px',
+                              borderRadius: '6px', fontSize: '12px', fontWeight: '600', zIndex: 10,
+                              pointerEvents: 'none', boxShadow: '0 2px 8px rgba(0,0,0,0.2)',
+                              animation: 'llm-fade-in 0.15s ease'
+                            }
+                          }, '✓ Copied!')
+                        : null,
                       React.createElement(
                         'pre',
                         {

@@ -68,13 +68,14 @@
         height: isContained ? "calc(100vh - 120px)" : "auto",
         minHeight: isContained ? "400px" : "auto",
         overflow: isContained ? (activeTab === "chat" ? "hidden" : "auto") : "auto",
-        overscrollBehavior: "contain",
+        flex: isContained ? "none" : "1 1 auto",
+        overscrollBehavior: isContained ? "contain" : "auto",
         WebkitOverflowScrolling: "touch",
       };
 
       return React.createElement(
         "div",
-        { style: { display: "flex", flexDirection: "column", height: "100%" } },
+        { style: { display: "flex", flexDirection: "column", height: isContained ? "100%" : "auto" } },
         // Tab navigation bar
         React.createElement(
           "div",

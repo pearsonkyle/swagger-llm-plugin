@@ -25,6 +25,33 @@ app = FastAPI(
     version="0.3.0",
     description="""
 A demonstration of LLM-enhanced API documentation using the [swagger-llm-plugin](https://github.com/pearsonkyle/swagger-llm-plugin).
+
+## Features
+
+- 💬 AI chat assistant with full OpenAPI context
+- 🤖 LLM Settings with local providers (Ollama, LM Studio, vLLM, Custom)
+- 🔗 Tool-calling for API Requests
+- 🎨 Dark/light theme support
+
+## Installation
+
+```bash
+pip install swagger-llm
+```
+
+## Quick Start
+
+```python
+from fastapi import FastAPI
+from swagger_llm import setup_docs
+
+app = FastAPI()
+setup_docs(app)  # replaces default /docs
+```
+
+### Example
+
+Use the **Chat** panel to ask questions about these endpoints!
 """,
 )
 

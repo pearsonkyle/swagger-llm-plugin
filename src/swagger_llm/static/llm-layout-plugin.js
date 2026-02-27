@@ -103,17 +103,17 @@
               { onClick: function () { setActiveTab("chat"); }, style: tabStyle("chat") },
               "Chat"
             ),
-            // Settings tab
-            React.createElement(
-              "button",
-              { onClick: function () { setActiveTab("settings"); }, style: tabStyle("settings") },
-              "Settings"
-            ),
             // Workflow tab
             React.createElement(
               "button",
               { onClick: function () { setActiveTab("workflow"); }, style: tabStyle("workflow") },
               "Workflow"
+            ),
+            // Settings tab
+            React.createElement(
+              "button",
+              { onClick: function () { setActiveTab("settings"); }, style: tabStyle("settings") },
+              "Settings"
             )
           )
         ),
@@ -128,11 +128,11 @@
           // Chat tab content
           activeTab === "chat" ? React.createElement(ChatPanel, null) : null,
           
-          // LLM Settings tab content
-          activeTab === "settings" ? React.createElement(LLMSettingsPanel, null) : null,
-
           // Workflow tab content
-          activeTab === "workflow" ? React.createElement(WorkflowPanel, null) : null
+          activeTab === "workflow" ? React.createElement(WorkflowPanel, null) : null,
+
+          // LLM Settings tab content
+          activeTab === "settings" ? React.createElement(LLMSettingsPanel, null) : null
         )
       );
     }

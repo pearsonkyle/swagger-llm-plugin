@@ -170,10 +170,32 @@
                 var schemaDef = mediaType.schema || {};
                 if (schemaDef && typeof schemaDef === 'object') {
                   lines.push('- Content-Type: `' + contentType + '`');
-                  if (schemaDef.type === 'object') {
-                    var props = schemaDef.properties || {};
-                    var propNames = Object.keys(props).slice(0, 5);
-                    lines.push('- Properties: ' + propNames.join(', ') + (Object.keys(props).length > 5 ? '...' : ''));
+                  // Resolve $ref to show actual schema properties
+                  var resolvedSchema = schemaDef;
+                  if (schemaDef['$ref'] && typeof schemaDef['$ref'] === 'string') {
+                    var refPath = schemaDef['$ref'].replace('#/components/schemas/', '');
+                    var compSchemas = (schema.components || {}).schemas || {};
+                    if (compSchemas[refPath]) {
+                      resolvedSchema = compSchemas[refPath];
+                      lines.push('- Schema: `' + refPath + '`');
+                    }
+                  }
+                  if (resolvedSchema.type === 'object' || resolvedSchema.properties) {
+                    var props = resolvedSchema.properties || {};
+                    var requiredFields = resolvedSchema.required || [];
+                    var propKeys = Object.keys(props).slice(0, 10);
+                    propKeys.forEach(function(pName) {
+                      var pDef = props[pName] || {};
+                      var pType = pDef.type || 'any';
+                      // Handle array types
+                      if (pType === 'array' && pDef.items) {
+                        var itemRef = (pDef.items['$ref'] || '').replace('#/components/schemas/', '');
+                        pType = 'array[' + (itemRef || pDef.items.type || 'object') + ']';
+                      }
+                      var pReq = requiredFields.indexOf(pName) >= 0 ? 'required' : 'optional';
+                      var pDesc = pDef.description || '';
+                      lines.push('  - `' + pName + '` (' + pType + ', ' + pReq + ')' + (pDesc ? ': ' + pDesc : ''));
+                    });
                   }
                 }
               });
@@ -1147,7 +1169,7 @@
         };
         try { executedArgs.query_params = JSON.parse(s.editQueryParams || '{}'); } catch (e) { executedArgs.query_params = {}; }
         try { executedArgs.path_params = JSON.parse(s.editPathParams || '{}'); } catch (e) { executedArgs.path_params = {}; }
-        if (s.editMethod === 'POST') {
+        if (s.editMethod === 'POST' || s.editMethod === 'PUT' || s.editMethod === 'PATCH') {
           try { executedArgs.body = JSON.parse(s.editBody || '{}'); } catch (e) { executedArgs.body = {}; }
         }
 
@@ -1197,15 +1219,18 @@
           fetchHeaders['Authorization'] = 'Bearer ' + toolApiKey;
         }
 
+        var hasBody = (s.editMethod === 'POST' || s.editMethod === 'PUT' || s.editMethod === 'PATCH') && s.editBody;
+        if (hasBody) {
+          fetchHeaders['Content-Type'] = 'application/json';
+        }
+
         var fetchOpts = {
           method: s.editMethod,
           headers: fetchHeaders,
         };
 
-        if (s.editMethod === 'POST' || s.editMethod === 'PUT' || s.editMethod === 'PATCH') {
-          try {
-            fetchOpts.body = s.editBody;
-          } catch (e) {}
+        if (hasBody) {
+          fetchOpts.body = s.editBody;
         }
 
         self.setState({ toolCallResponse: { status: 'loading', body: '' } });
@@ -1952,7 +1977,10 @@
               React.createElement("div", { style: labelStyle }, "Method"),
               React.createElement("select", { value: s.editMethod, onChange: function(e) { self.setState({ editMethod: e.target.value }); }, style: inputStyle },
                 React.createElement("option", { value: "GET" }, "GET"),
-                React.createElement("option", { value: "POST" }, "POST")
+                React.createElement("option", { value: "POST" }, "POST"),
+                React.createElement("option", { value: "PUT" }, "PUT"),
+                React.createElement("option", { value: "PATCH" }, "PATCH"),
+                React.createElement("option", { value: "DELETE" }, "DELETE")
               )
             ),
             React.createElement(
@@ -1968,7 +1996,7 @@
               React.createElement("input", { type: "text", value: s.editQueryParams, onChange: function(e) { self.setState({ editQueryParams: e.target.value }); }, style: inputStyle, placeholder: '{}' })
             )
           ),
-          s.editMethod === 'POST' && React.createElement("div", { style: { marginBottom: "8px" } },
+          (s.editMethod === 'POST' || s.editMethod === 'PUT' || s.editMethod === 'PATCH') && React.createElement("div", { style: { marginBottom: "8px" } },
             React.createElement("div", { style: Object.assign({}, labelStyle, { display: "flex", alignItems: "center", justifyContent: "space-between" }) }, 
               "Body",
               React.createElement("span", { style: { fontSize: "10px", color: "var(--theme-text-secondary)", fontWeight: "400" } }, "JSON")

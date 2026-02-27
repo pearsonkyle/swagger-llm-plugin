@@ -913,3 +913,37 @@ def test_api_tab_scroll_not_constrained():
 
     # API tab should not have fixed height or overscroll contain
     assert 'isContained ? "contain" : "auto"' in js_content
+
+
+def test_tool_call_post_content_type():
+    """Verify POST/PUT/PATCH tool calls set Content-Type: application/json header."""
+    client = TestClient(make_app())
+
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+
+    # handleExecuteToolCall should set Content-Type for body-bearing methods
+    assert "fetchHeaders['Content-Type'] = 'application/json'" in js_content
+    # Body should be included for POST, PUT, and PATCH
+    assert "s.editMethod === 'POST' || s.editMethod === 'PUT' || s.editMethod === 'PATCH'" in js_content
+
+
+def test_tool_call_panel_all_methods():
+    """Verify tool call panel shows all HTTP methods in the dropdown."""
+    client = TestClient(make_app())
+
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+
+    for method in ["GET", "POST", "PUT", "PATCH", "DELETE"]:
+        assert 'value: "' + method + '"' in js_content
+
+
+def test_request_body_schema_ref_resolution():
+    """Verify request body $ref schemas are resolved in system prompt."""
+    client = TestClient(make_app())
+
+    js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
+
+    # Should resolve $ref to show schema name and properties
+    assert "refPath" in js_content
+    assert "components/schemas" in js_content
+    assert "resolvedSchema" in js_content

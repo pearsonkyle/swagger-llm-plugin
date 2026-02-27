@@ -3101,9 +3101,9 @@
                         });
                         if (toolCallsList.length > 0) {
                           executeToolCall(toolCallsList[0], idx, messages, function(toolOutput) {
-                            var tc0 = toolCallsList[0];
+                            var firstToolCall = toolCallsList[0];
                             var tcArgs = {};
-                            try { tcArgs = JSON.parse(tc0.function.arguments || '{}'); } catch (e) {}
+                            try { tcArgs = JSON.parse(firstToolCall.function.arguments || '{}'); } catch (e) {}
                             var curlCmd = buildCurlCommand(
                               tcArgs.method || 'GET',
                               tcArgs.path || '',

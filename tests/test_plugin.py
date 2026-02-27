@@ -835,13 +835,14 @@ def test_workflow_storage_key():
 
 
 def test_workflow_styles_injected():
-    """Verify workflow panel CSS is injected."""
+    """Verify workflow panel uses theme-aware CSS variables."""
     client = TestClient(make_app())
 
     js_content = client.get("/swagger-llm-static/llm-settings-plugin.js").text
 
-    assert "swagger-llm-workflow-styles" in js_content
     assert "llm-workflow" in js_content
+    assert "var(--theme-border-color)" in js_content
+    assert "var(--theme-primary)" in js_content
 
 
 def test_export_function_exists():

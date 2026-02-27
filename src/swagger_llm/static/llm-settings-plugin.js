@@ -1076,7 +1076,6 @@
         this.renderToolCallPanel = this.renderToolCallPanel.bind(this);
         this._copyTimeoutId = null;
         this._fetchAbortController = null;
-        this._lastToolCallAssistantMsg = null;
 
         initMarked();
       }
@@ -1614,7 +1613,6 @@
                           }),
                           messageId: streamMsgId
                         };
-                        self._lastToolCallAssistantMsg = assistantToolMsg;
                         self._pendingToolCallMsg = assistantToolMsg;
 
                         self.setState(function(prev) {
@@ -1644,6 +1642,9 @@
                       }
                     }
                   } catch (e) {
+                    if (typeof console !== 'undefined' && console && typeof console.error === 'function') {
+                      console.error('Error processing streaming chunk:', payloadData, e);
+                    }
                   }
                 }
 
@@ -3498,13 +3499,6 @@
       }
     };
   }
-
-  // ── Workflow panel CSS ─────────────────────────────────────────────────────
-  var workflowStyles = [
-    '.llm-workflow-block:hover { border-color: var(--theme-accent); box-shadow: 0 2px 8px rgba(0,0,0,0.1); }',
-  ].join('\n');
-
-  injectStyles('swagger-llm-workflow-styles', workflowStyles);
 
   // ── Plugin definition ───────────────────────────────────────────────────────
   window.LLMSettingsPlugin = function (system) {

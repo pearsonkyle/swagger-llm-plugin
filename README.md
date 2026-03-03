@@ -1,4 +1,4 @@
-# DocBuddy
+# Documentation Buddy
 
 > Add an AI assistant to your `/docs` page.
 
@@ -62,7 +62,7 @@ pytest tests/
 ## Demo Server
 
 ```bash
-uvicorn examples.demo_server:app --reload
+uvicorn examples.demo_server:app --reload --host 0.0.0.0 --port 3333
 ```
 
 ## Future Developments

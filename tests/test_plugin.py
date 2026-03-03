@@ -806,8 +806,8 @@ def test_workflow_panel_block_chaining():
 
     js_content = client.get("/docbuddy-static/llm-settings-plugin.js").text
 
-    assert "previousOutput" in js_content
-    assert "Previous step output" in js_content
+    assert "conversationHistory" in js_content
+    assert "currentUserMessage" in js_content
 
 
 def test_workflow_panel_tool_execution():

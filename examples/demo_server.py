@@ -21,10 +21,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from docbuddy import setup_docs
 
 app = FastAPI(
-    title="Invoice API",
+    title="Demo API",
     version="0.3.0",
     description="""
-A demonstration of LLM-enhanced API documentation using DocBuddy.
+A demonstration of LLM-enhanced API documentation using [docbuddy](https://github.com/pearsonkyle/docbuddy).
 
 ## Features
 

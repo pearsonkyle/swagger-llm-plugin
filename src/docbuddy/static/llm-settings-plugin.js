@@ -255,6 +255,11 @@
   }
 
   // ── Build curl command from tool call arguments ───────────────────────────
+  // Shell-escape a value for safe embedding in single-quoted strings
+  function shellEscape(val) {
+    return String(val).replace(/'/g, "'\\''");
+  }
+
   function buildCurlCommand(method, path, queryParams, pathParams, body) {
     var url = path;
     if (queryParams && Object.keys(queryParams).length > 0) {
@@ -263,23 +268,22 @@
       }).join('&');
       url += '?' + qs;
     }
-    var cmd = 'curl -X ' + method.toUpperCase() + ' "' + url + '"';
-    
+    // Use single quotes around URL to prevent shell expansion of $(), backticks, etc.
+    var cmd = 'curl -X ' + method.toUpperCase() + " '" + shellEscape(url) + "'";
+
     // Add headers
-    cmd += ' \\\n  -H "Content-Type: application/json"';
-    
+    cmd += " \\\n  -H 'Content-Type: application/json'";
+
     // Add body if present
     if (body && Object.keys(body).length > 0) {
       try {
         var bodyJson = JSON.stringify(body, null, 2);
-        // Escape single quotes in the JSON for safe embedding in curl command
-        bodyJson = bodyJson.replace(/'/g, "'\\''");
-        cmd += ' \\\n  -d \'' + bodyJson + '\'';
+        cmd += " \\\n  -d '" + shellEscape(bodyJson) + "'";
       } catch (e) {
-        cmd += ' \\\n  -d \'{}\'';
+        cmd += " \\\n  -d '{}'";
       }
     }
-    
+
     return cmd;
   }
 
@@ -353,67 +357,46 @@
   }
 
   // ── Markdown parser initialization (marked.js) ────────────────────────────
-  var marked = null;
+  // marked.js is loaded synchronously in the HTML template for consistent rendering.
+  var marked = (typeof window.marked !== 'undefined') ? window.marked : null;
   function initMarked() {
-    if (marked) return marked;
-    
-    if (typeof window.marked !== 'undefined') {
+    if (!marked && typeof window.marked !== 'undefined') {
       marked = window.marked;
-      return marked;
     }
-    
-    var script = document.createElement('script');
-    script.src = 'https://cdn.jsdelivr.net/npm/marked@9/marked.min.js';
-    script.async = true;
-    document.head.appendChild(script);
-    
-    var promise = new Promise(function(resolve, reject) {
-      var timedOut = false;
-      var timeout = setTimeout(function() {
-        timedOut = true;
-        reject(new Error('marked.js failed to load within 10 seconds'));
-      }, 10000);
-
-      var checkLoaded = function() {
-        if (timedOut) return;
-        if (window.marked) {
-          clearTimeout(timeout);
-          marked = window.marked;
-          resolve(marked);
-        } else {
-          setTimeout(checkLoaded, 100);
-        }
-      };
-      checkLoaded();
-    });
-    
-    return promise;
+    return marked;
   }
 
   // ── Parse Markdown safely ─────────────────────────────────────────────────
+  function _escapeHtml(text) {
+    return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
+  }
+
   function parseMarkdown(text) {
     if (!text || typeof text !== 'string') return '';
+
+    // Refuse to render markdown without DOMPurify — fall back to escaped text
+    if (typeof DOMPurify === 'undefined') {
+      console.error('DOMPurify not loaded — refusing to render markdown. Falling back to plain text.');
+      return _escapeHtml(text);
+    }
 
     try {
       if (marked) {
         var html = marked.parse(text);
-        // Always sanitize - DOMPurify loads from CDN in template
-        if (typeof DOMPurify !== 'undefined') {
-          return DOMPurify.sanitize(html);
+        var sanitized = DOMPurify.sanitize(html);
+        // Defense-in-depth: reject output that still contains dangerous patterns
+        if (/<script[\s>]/i.test(sanitized) || /\bon[a-z]+\s*=/i.test(sanitized)) {
+          console.error('DOMPurify produced suspicious output — falling back to plain text');
+          return _escapeHtml(text);
         }
-        // If DOMPurify not available, fallback to strict plain text
-        console.warn('DOMPurify not loaded - using safe fallback');
-        var escaped = text.replace(/&/g, '&').replace(/</g, '<').replace(/>/g, '>');
-        return escaped.replace(/\n/g, '<br>');
+        return sanitized;
       }
     } catch (e) {
       console.error('Markdown parsing error:', e);
-      // Fallback on any error: return escaped plain text
     }
 
     // Fallback: plain text with line breaks, sanitized
-    var escaped = text.replace(/&/g, '&').replace(/</g, '<').replace(/>/g, '>');
-    return escaped.replace(/\n/g, '<br>');
+    return _escapeHtml(text);
   }
 
   // ── Theme default configurations ─────────────────────────────────────────────
@@ -452,6 +435,9 @@
   var SETTINGS_STORAGE_KEY = "docbuddy-settings";
   var CHAT_HISTORY_KEY = "docbuddy-chat-history";
   var TOOL_SETTINGS_KEY = "docbuddy-tool-settings";
+
+  // In-memory cache for the OpenAPI schema (not persisted to localStorage to avoid quota issues)
+  var _cachedOpenapiSchema = null;
 
   // ── Theme loading/saving functions ─────────────────────────────────────────
   function loadTheme() {
@@ -1109,14 +1095,7 @@
           .then(function (res) { return res.json(); })
           .then(function (schema) {
             dispatchAction(system, 'setOpenApiSchema', schema);
-            
-            try {
-                var storedSettings = loadFromStorage();
-                storedSettings.openapiSchema = schema;
-                saveToStorage(storedSettings);
-            } catch (e) {
-            }
-            
+            _cachedOpenapiSchema = schema;
             self.setState({ schemaLoading: false });
           })
           .catch(function (err) {
@@ -1191,6 +1170,17 @@
         }
 
         var url = s.editPath;
+
+        // Validate URL is a relative path — reject absolute URLs to prevent
+        // sending credentials (Authorization header) to external servers.
+        if (!url || !/^\/[^\/\\]/.test(url)) {
+          console.error('[Tool Call] Rejected non-relative path:', url);
+          var rejectObj = { status: 0, statusText: 'Blocked', body: 'Tool call path must be a relative URL starting with /' };
+          self.setState({ toolCallResponse: rejectObj });
+          self.sendToolResult(rejectObj);
+          return;
+        }
+
         try {
           var pathParams = JSON.parse(s.editPathParams || '{}');
           Object.keys(pathParams).forEach(function(key) {
@@ -1208,6 +1198,9 @@
             url += (url.indexOf('?') >= 0 ? '&' : '?') + qs;
           }
         } catch (e) {}
+
+        // Prepend origin to ensure request stays on the same host
+        url = window.location.origin + url;
 
         // Build headers - only Authorization for tool calls
         var fetchHeaders = {};
@@ -1296,13 +1289,7 @@
           toolRetryCount: isError ? s.toolRetryCount + 1 : 0,
         });
 
-        var fullSchema = null;
-        try {
-          var storedSettings = loadFromStorage();
-          if (storedSettings.openapiSchema) fullSchema = storedSettings.openapiSchema;
-        } catch (e) {}
-
-        self._streamLLMResponse(apiMessages, streamMsgId, fullSchema);
+        self._streamLLMResponse(apiMessages, streamMsgId, _cachedOpenapiSchema);
       }
 
       // ── Error classification and user-friendly messages ─────────────────────
@@ -1436,9 +1423,11 @@
         var selectedPreset = this.state.selectedPreset || 'api_assistant';
         var systemPrompt = getSystemPromptForPreset(selectedPreset, fullSchema);
         
-        // Add tool calling instructions if enabled
+        // When native tools are enabled, strip text-based tool calling format
+        // instructions — they conflict with the native tool_calls mechanism
         if (toolSettings.enableTools) {
-          systemPrompt += "\n\nYou have access to the `api_request` tool to execute API calls. When the user asks you to call an endpoint, use the tool instead of just showing a curl command. If a tool call returns an error, you may retry with corrected parameters (up to 3 times).";
+          systemPrompt = systemPrompt.replace(/## Tool Calling Instructions[\s\S]*$/, '').trimEnd();
+          systemPrompt += "\n\nUse the `api_request` tool via native tool calling when the user asks to call an API endpoint. Do NOT output tool calls as JSON text — the system handles tool execution automatically. If a tool call returns an error, you may retry with corrected parameters (up to 3 times).";
         }
 
         var scrollToBottom = function() {
@@ -1682,13 +1671,7 @@
 
         self.addMessage(userMsg);
 
-        var fullSchema = null;
-        try {
-          var storedSettings = loadFromStorage();
-          if (storedSettings.openapiSchema) fullSchema = storedSettings.openapiSchema;
-        } catch (e) {}
-
-        self._streamLLMResponse(apiMessages, streamMsgId, fullSchema);
+        self._streamLLMResponse(apiMessages, streamMsgId, _cachedOpenapiSchema);
       }
 
       handleBubbleClick(msgId, text) {
@@ -2865,7 +2848,8 @@
       type: 'prompt',
       content: '',
       output: '',
-      status: 'idle'
+      status: 'idle',
+      enableTools: true
     };
   }
 
@@ -2903,13 +2887,14 @@
         this.handleAddBlock = this.handleAddBlock.bind(this);
         this.handleRemoveBlock = this.handleRemoveBlock.bind(this);
         this.handleBlockContentChange = this.handleBlockContentChange.bind(this);
+        this.handleToggleBlockTools = this.handleToggleBlockTools.bind(this);
         this.runWorkflow = this.runWorkflow.bind(this);
       }
 
       componentDidUpdate(prevProps, prevState) {
         if (prevState.blocks !== this.state.blocks && !this.state.running) {
           var persistedBlocks = this.state.blocks.map(function(b) {
-            return { id: b.id, type: b.type, content: b.content };
+            return { id: b.id, type: b.type, content: b.content, enableTools: b.enableTools !== false };
           });
           saveWorkflow({ blocks: persistedBlocks });
         }
@@ -2940,6 +2925,17 @@
           return {
             blocks: prev.blocks.map(function(b) {
               if (b.id === blockId) return Object.assign({}, b, { content: value });
+              return b;
+            })
+          };
+        });
+      }
+
+      handleToggleBlockTools(blockId) {
+        this.setState(function(prev) {
+          return {
+            blocks: prev.blocks.map(function(b) {
+              if (b.id === blockId) return Object.assign({}, b, { enableTools: b.enableTools === false ? true : false });
               return b;
             })
           };
@@ -2992,7 +2988,8 @@
 
       runWorkflow() {
         var self = this;
-        var previousOutput = '';
+        // Use conversationHistory as the accumulated chain of messages across all blocks
+        var conversationHistory = [];
 
         function runBlock(idx) {
           var currentBlocks = self.state.blocks;
@@ -3008,23 +3005,28 @@
           updatedBlocks[idx] = Object.assign({}, updatedBlocks[idx], { status: 'running', output: '' });
           self.setState({ blocks: updatedBlocks });
 
-          var prompt = block.content || '';
-          if (previousOutput) {
-            prompt = 'Previous step output:\n' + previousOutput + '\n\n' + prompt;
-          }
-
           var settings = loadFromStorage();
           var toolSettings = loadToolSettings();
-          var systemPrompt = 'You are a workflow assistant. Execute the user instructions step by step. Be concise in your responses.';
-
-          if (toolSettings.enableTools) {
-            systemPrompt += '\n\nYou have access to the `api_request` tool to execute API calls. Use it when the user asks to call an endpoint.';
+          var blockToolsEnabled = toolSettings.enableTools && (block.enableTools !== false);
+          
+          // FIX: Use system prompt from Settings, not hardcoded 'api_assistant'
+          var selectedPreset = settings.systemPromptPreset || 'api_assistant';
+          var systemPrompt = getSystemPromptForPreset(selectedPreset, _cachedOpenapiSchema);
+          
+          // When native tools are enabled, strip text-based tool calling format
+          // instructions — they conflict with the native tool_calls mechanism
+          if (blockToolsEnabled) {
+            systemPrompt = systemPrompt.replace(/## Tool Calling Instructions[\s\S]*$/, '').trimEnd();
+            systemPrompt += '\n\nUse the `api_request` tool via native tool calling when the user asks to call an API endpoint. Do NOT output tool calls as JSON text — the system handles tool execution automatically.';
           }
+          systemPrompt += '\n\nYou are executing a multi-step workflow. Be concise. Execute each instruction precisely.';
 
-          var messages = [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: prompt }
-          ];
+          var currentUserMessage = { role: 'user', content: block.content || '' };
+          
+          // FIX: Build messages array with system prompt + accumulated conversation history
+          var messages = [{ role: 'system', content: systemPrompt }]
+            .concat(conversationHistory)
+            .concat([currentUserMessage]);
 
           var payload = {
             messages: messages,
@@ -3034,12 +3036,8 @@
             stream: true,
           };
 
-          if (toolSettings.enableTools) {
-            var fullSchema = null;
-            try {
-              var storedSettings = loadFromStorage();
-              if (storedSettings.openapiSchema) fullSchema = storedSettings.openapiSchema;
-            } catch (e) {}
+          if (blockToolsEnabled) {
+            var fullSchema = _cachedOpenapiSchema;
             if (fullSchema) {
               payload.tools = [buildApiRequestTool(fullSchema)];
               payload.tool_choice = 'auto';
@@ -3052,13 +3050,19 @@
           }
 
           var baseUrl = (settings.baseUrl || '').replace(/\/+$/, '');
+          
           // Abort any existing in-flight request before starting a new one
           if (self._abortController && typeof self._abortController.abort === 'function') {
             try { self._abortController.abort(); } catch (e) {}
           }
+          
           self._abortController = new AbortController();
           var accumulated = '';
           var accumulatedToolCalls = {};
+          
+          // FIX: Track messages generated during this block for proper history
+          var blockMessages = [];
+          var lastAssistantContent = ''; // Track the assistant's final output for chaining
 
           fetch(baseUrl + '/chat/completions', {
             method: 'POST',
@@ -3080,7 +3084,8 @@
                 return reader.read().then(function(result) {
                   if (self.state.aborted) return;
                   if (result.done) {
-                    return finishBlock(accumulated);
+                    // FIX: Pass lastAssistantContent to finishBlock for proper chaining
+                    return finishBlock(accumulated, blockMessages);
                   }
 
                   buffer += decoder.decode(result.value, { stream: true });
@@ -3092,13 +3097,15 @@
                     if (!line || !line.startsWith('data: ')) continue;
                     var payloadData = line.substring(6);
                     if (payloadData === '[DONE]') {
-                      return finishBlock(accumulated);
+                      return finishBlock(accumulated, blockMessages);
                     }
 
                     try {
                       var chunk = JSON.parse(payloadData);
                       if (chunk.error) {
-                        return finishBlock('Error: ' + chunk.error);
+                        var errMsg = typeof chunk.error === 'string' ? chunk.error
+                          : (chunk.error.message || JSON.stringify(chunk.error));
+                        return finishBlock('Error: ' + errMsg, blockMessages);
                       }
                       var choice = chunk.choices && chunk.choices[0];
                       if (!choice) continue;
@@ -3129,8 +3136,33 @@
                           return accumulatedToolCalls[k];
                         });
                         if (toolCallsList.length > 0) {
-                          executeToolCall(toolCallsList[0], idx, messages, function(toolOutput) {
+                          // For Mistral/Qwen compatibility, send tool call messages to executeToolCall
+                          // which will build the proper message sequence for history
+
+                          executeToolCall(toolCallsList[0], toolCallsList, function(toolOutput) {
                             var firstToolCall = toolCallsList[0];
+                            
+                            // Build proper message sequence:
+                            // 1. User message (already added in finishBlock)
+                            // 2. Assistant message with tool_calls
+                            // 3. Tool result message (what we're adding here)
+
+                            // Add assistant tool_calls message to blockMessages
+                            blockMessages.push({
+                              role: 'assistant',
+                              content: null,
+                              tool_calls: toolCallsList.map(function(tc) {
+                                return { id: tc.id, type: 'function', function: { name: tc.function.name, arguments: tc.function.arguments } };
+                              })
+                            });
+                            
+                            // Add tool result message
+                            blockMessages.push({
+                              role: 'tool',
+                              tool_call_id: firstToolCall.id,
+                              content: toolOutput
+                            });
+
                             var tcArgs = {};
                             try { tcArgs = JSON.parse(firstToolCall.function.arguments || '{}'); } catch (e) {}
                             var curlCmd = buildCurlCommand(
@@ -3144,7 +3176,9 @@
                             var currentBlocks2 = self.state.blocks.slice();
                             currentBlocks2[idx] = Object.assign({}, currentBlocks2[idx], { output: accumulated });
                             self.setState({ blocks: currentBlocks2 });
-                            finishBlock(accumulated);
+                            
+                            // Pass blockMessages to finishBlock
+                            finishBlock(accumulated, blockMessages);
                           });
                           return;
                         }
@@ -3165,10 +3199,10 @@
                 self._abortController = null;
                 return;
               }
-              finishBlock('Error: ' + (err && err.message ? err.message : 'Request failed'));
+              finishBlock('Error: ' + (err && err.message ? err.message : 'Request failed'), blockMessages);
             });
 
-          function executeToolCall(tc, blockIdx, currentMessages, callback) {
+          function executeToolCall(tc, toolCallsList, callback) {
             var args = {};
             try { args = JSON.parse(tc.function.arguments || '{}'); } catch (e) {}
             var method = args.method || 'GET';
@@ -3208,6 +3242,7 @@
             if (hasBody) {
               fetchOpts.body = JSON.stringify(args.body);
             }
+            
             // Respect abort signal for tool calls
             if (self._abortController) {
               fetchOpts.signal = self._abortController.signal;
@@ -3227,14 +3262,31 @@
               });
           }
 
-          function finishBlock(output) {
+          // Simplified finishBlock - properly builds message sequence
+          function finishBlock(output, historyMessages) {
+            // For Mistral compatibility, use a simple approach:
+            // - If tools were used: only add the assistant's final text response (not tool_calls/.tool messages)
+            // - If no tools: add the normal assistant text response
+            //
+            // This avoids "Not the same number of function calls and responses" errors
+            // because tool_calls and tool messages are not sent to the next LLM request.
+            
+            if (historyMessages && historyMessages.length > 0) {
+              // We had tool calls, but only add the final assistant text response
+              // The tool_calls and tool results were already consumed/executed
+              if (accumulated) {
+                conversationHistory.push({ role: 'assistant', content: accumulated });
+              }
+            } else {
+              // No tool calls - just normal assistant response
+              conversationHistory.push({ role: 'assistant', content: output || accumulated || '' });
+            }
+
             var currentBlocks = self.state.blocks.slice();
             currentBlocks[idx] = Object.assign({}, currentBlocks[idx], {
               output: output || '(no output)',
               status: 'done'
             });
-            // Update previousOutput for chaining into next block
-            previousOutput = output || '';
             self.setState({ blocks: currentBlocks }, function() {
               runBlock(idx + 1);
             });
@@ -3293,6 +3345,8 @@
 
         var hasContent = s.blocks.some(function(b) { return b.content && b.content.trim(); });
         var startDisabled = s.running || !hasContent;
+        var globalToolSettings = loadToolSettings();
+        var globalToolsEnabled = globalToolSettings.enableTools;
 
         return React.createElement(
           'div',
@@ -3398,6 +3452,22 @@
                             textTransform: 'uppercase',
                           }
                         }, 'Block ' + (idx + 1)),
+                        globalToolsEnabled ? React.createElement('span', {
+                          onClick: !s.running ? function() { self.handleToggleBlockTools(block.id); } : null,
+                          style: {
+                            fontSize: '10px',
+                            fontWeight: '600',
+                            color: '#fff',
+                            background: block.enableTools !== false ? '#10b981' : '#6b7280',
+                            padding: '2px 8px',
+                            borderRadius: '4px',
+                            cursor: s.running ? 'default' : 'pointer',
+                            opacity: s.running ? 0.7 : 1,
+                            userSelect: 'none',
+                            transition: 'all 0.2s ease',
+                          },
+                          title: block.enableTools !== false ? 'Tools enabled — click to disable' : 'Tools disabled — click to enable'
+                        }, block.enableTools !== false ? 'Tools ✓' : 'Tools ✗') : null,
                         statusBadge
                       ),
                       !s.running ? React.createElement('button', {
@@ -3519,6 +3589,9 @@
   };
 
   // ── Theme injection function ────────────────────────────────────────────────
+  var _colorRe = /^#[0-9a-fA-F]{3,8}$|^rgba?\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*(,\s*(0|1|0?\.\d+))?\s*\)$/;
+  function _safeColor(val, fallback) { return _colorRe.test(val) ? val : fallback; }
+
   window.applyLLMTheme = function (themeName, customColors) {
     var validatedTheme = THEME_DEFINITIONS[themeName] ? themeName : 'dark';
     var themeDef = THEME_DEFINITIONS[validatedTheme];
@@ -3526,17 +3599,17 @@
     var finalColors = Object.assign({}, themeDef, customColors);
 
     var cssVars = [
-      '--theme-primary: ' + finalColors.primary,
-      '--theme-primary-hover: ' + (finalColors.primaryHover || finalColors.primary),
-      '--theme-secondary: ' + finalColors.secondary,
-      '--theme-accent: ' + finalColors.accent,
-      '--theme-background: ' + finalColors.background,
-      '--theme-panel-bg: ' + (finalColors.panelBg || finalColors.secondary),
-      '--theme-header-bg: ' + (finalColors.headerBg || finalColors.background),
-      '--theme-border-color: ' + (finalColors.borderColor || finalColors.secondary),
-      '--theme-text-primary: ' + finalColors.textPrimary,
-      '--theme-text-secondary: ' + (finalColors.textSecondary || '#6b7280'),
-      '--theme-input-bg: ' + (finalColors.inputBg || finalColors.secondary),
+      '--theme-primary: ' + _safeColor(finalColors.primary, themeDef.primary),
+      '--theme-primary-hover: ' + _safeColor(finalColors.primaryHover || finalColors.primary, themeDef.primaryHover || themeDef.primary),
+      '--theme-secondary: ' + _safeColor(finalColors.secondary, themeDef.secondary),
+      '--theme-accent: ' + _safeColor(finalColors.accent, themeDef.accent),
+      '--theme-background: ' + _safeColor(finalColors.background, themeDef.background),
+      '--theme-panel-bg: ' + _safeColor(finalColors.panelBg || finalColors.secondary, themeDef.panelBg || themeDef.secondary),
+      '--theme-header-bg: ' + _safeColor(finalColors.headerBg || finalColors.background, themeDef.headerBg || themeDef.background),
+      '--theme-border-color: ' + _safeColor(finalColors.borderColor || finalColors.secondary, themeDef.borderColor || themeDef.secondary),
+      '--theme-text-primary: ' + _safeColor(finalColors.textPrimary, themeDef.textPrimary),
+      '--theme-text-secondary: ' + _safeColor(finalColors.textSecondary || '#6b7280', themeDef.textSecondary || '#6b7280'),
+      '--theme-input-bg: ' + _safeColor(finalColors.inputBg || finalColors.secondary, themeDef.inputBg || themeDef.secondary),
     ].join('; ');
 
     var css = ':root { ' + cssVars + ' }';

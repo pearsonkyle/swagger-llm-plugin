@@ -90,29 +90,29 @@
           },
           React.createElement(
             "div",
-            { style: { display: "flex", gap: "2px", padding: "8px 8px 0 8px" } },
+            { role: "tablist", "aria-label": "Documentation tabs", style: { display: "flex", gap: "2px", padding: "8px 8px 0 8px" } },
             // API tab
             React.createElement(
               "button",
-              { onClick: function () { setActiveTab("api"); }, style: tabStyle("api") },
+              { role: "tab", "aria-selected": activeTab === "api", onClick: function () { setActiveTab("api"); }, style: tabStyle("api") },
               "API"
             ),
             // Chat tab
             React.createElement(
               "button",
-              { onClick: function () { setActiveTab("chat"); }, style: tabStyle("chat") },
+              { role: "tab", "aria-selected": activeTab === "chat", onClick: function () { setActiveTab("chat"); }, style: tabStyle("chat") },
               "Chat"
             ),
             // Workflow tab
             React.createElement(
               "button",
-              { onClick: function () { setActiveTab("workflow"); }, style: tabStyle("workflow") },
+              { role: "tab", "aria-selected": activeTab === "workflow", onClick: function () { setActiveTab("workflow"); }, style: tabStyle("workflow") },
               "Workflow"
             ),
             // Settings tab
             React.createElement(
               "button",
-              { onClick: function () { setActiveTab("settings"); }, style: tabStyle("settings") },
+              { role: "tab", "aria-selected": activeTab === "settings", onClick: function () { setActiveTab("settings"); }, style: tabStyle("settings") },
               "Settings"
             )
           )
@@ -121,7 +121,7 @@
         // Content area - use dynamic contentStyle for proper chat height
         React.createElement(
           "div",
-          { style: contentStyle },
+          { role: "tabpanel", style: contentStyle },
           // API api tab content
           activeTab === "api" ? React.createElement(BaseLayout, props) : null,
           

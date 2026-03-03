@@ -646,10 +646,10 @@
       case SET_THEME:
         var newTheme = action.payload;
         if (!THEME_DEFINITIONS[newTheme]) {
-          console.warn('Invalid theme:', newTheme, 'Using default dark theme');
-          newTheme = 'dark';
+          console.warn('Invalid theme:', newTheme, 'Using default light theme');
+          newTheme = 'light';
         }
-        var themeDef = THEME_DEFINITIONS[newTheme] || THEME_DEFINITIONS.dark;
+        var themeDef = THEME_DEFINITIONS[newTheme] || THEME_DEFINITIONS.light;
         var mergedColors = Object.assign({}, themeDef, state.customColors || {});
         saveTheme({ theme: newTheme, customColors: mergedColors });
         return Object.assign({}, state, { theme: newTheme, customColors: mergedColors });
@@ -873,7 +873,7 @@
       }
 
       handleCopy() {
-        const { text, messageId } = this.props;
+        const { text } = this.props;
         if (!text) return;
 
         copyToClipboard(text).then(function(copied) {
@@ -930,6 +930,9 @@
           React.createElement(
             "div",
             {
+              role: "button",
+              "aria-label": copied ? "Copied!" : "Click to copy " + language + " code",
+              tabIndex: 0,
               style: {
                 display: "flex",
                 justifyContent: "space-between",
@@ -2050,8 +2053,8 @@
                   "button",
                   {
                     onClick: this.clearHistory,
-                    disabled: this.state.isTyping || this.state.isProcessingToolCall,
-                    style: { border: 'none', borderRadius: '6px', cursor: (this.state.isTyping || this.state.isProcessingToolCall) ? 'not-allowed' : 'pointer', fontSize: '12px', fontWeight: '500', transition: 'all 0.2s ease', background: (this.state.isTyping || this.state.isProcessingToolCall) ? 'var(--theme-accent)' : 'var(--theme-accent)', opacity: (this.state.isTyping || this.state.isProcessingToolCall) ? 0.6 : 1, color: '#fff', padding: '8px 12px' }
+                    disabled: this.state.isTyping || !!this.state.pendingToolCall,
+                    style: { border: 'none', borderRadius: '6px', cursor: (this.state.isTyping || !!this.state.pendingToolCall) ? 'not-allowed' : 'pointer', fontSize: '12px', fontWeight: '500', transition: 'all 0.2s ease', background: 'var(--theme-accent)', opacity: (this.state.isTyping || !!this.state.pendingToolCall) ? 0.6 : 1, color: '#fff', padding: '8px 12px' }
                   },
                   "Clear"
                 ),
@@ -2075,9 +2078,7 @@
                 this.state.isTyping && React.createElement(
                   "button",
                   {
-                    onClick: function() { 
-                      if (self._currentCancelToken) self._currentCancelToken.abort(); 
-                    },
+                    onClick: this.handleCancel,
                     style: { border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: '500', background: '#dc2626', color: '#fff', padding: '8px 16px' }
                   },
                 "❌ Cancel"
@@ -2087,7 +2088,7 @@
                 {
                   onClick: this.handleSend,
                   disabled: !this.state.input.trim() || this.state.isTyping,
-                  style: { border: 'none', borderRadius: '6px', cursor: (!this.state.input.trim() || this.state.isTyping) ? 'not-allowed' : 'pointer', fontSize: '12px', fontWeight: '500', transition: 'all 0.2s ease', background: (!this.state.input.trim() || this.state.isTyping) ? 'var(--theme-primary)' : 'var(--theme-primary)', opacity: (!this.state.input.trim() || this.state.isTyping) ? 0.6 : 1, color: '#fff', padding: '8px 16px' }
+                  style: { border: 'none', borderRadius: '6px', cursor: (!this.state.input.trim() || this.state.isTyping) ? 'not-allowed' : 'pointer', fontSize: '12px', fontWeight: '500', transition: 'all 0.2s ease', background: 'var(--theme-primary)', opacity: (!this.state.input.trim() || this.state.isTyping) ? 0.6 : 1, color: '#fff', padding: '8px 16px' }
                 },
                 this.state.isTyping ? "..." : "Send"
               )
@@ -2369,7 +2370,7 @@
 
         var fields = React.createElement(
           "div",
-          { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px 20px" } },
+          { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "12px 20px" } },
           providerField,
           baseUrlField,
           React.createElement(
@@ -2460,7 +2461,7 @@
 
         var colorFields = React.createElement(
           "div",
-          { style: { display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: "12px" } },
+          { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(80px, 1fr))", gap: "12px" } },
           React.createElement(
             "div",
             { style: fieldStyle },
@@ -2504,7 +2505,7 @@
           React.createElement("h3", { style: { color: "var(--theme-text-primary)", fontSize: "14px", fontWeight: "600", marginBottom: "12px" } }, "Tool Calling (API Execution)"),
           React.createElement(
             "div",
-            { style: { display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: "12px 20px", alignItems: "start" } },
+            { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "12px 20px", alignItems: "start" } },
             React.createElement(
               "div",
               { style: fieldStyle },
@@ -2649,7 +2650,7 @@
             React.createElement("h3", { style: { color: "var(--theme-text-primary)", fontSize: "14px", fontWeight: "600", marginBottom: "12px" } }, "Theme Settings"),
             React.createElement(
               "div",
-              { style: { display: "grid", gridTemplateColumns: "1fr 3fr", gap: "12px" } },
+              { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(120px, 1fr))", gap: "12px" } },
               themeConfig,
               React.createElement(
                 "div",
@@ -3062,7 +3063,6 @@
           
           // FIX: Track messages generated during this block for proper history
           var blockMessages = [];
-          var lastAssistantContent = ''; // Track the assistant's final output for chaining
 
           fetch(baseUrl + '/chat/completions', {
             method: 'POST',
@@ -3208,6 +3208,13 @@
             var method = args.method || 'GET';
             var url = args.path || '';
 
+            // Validate URL is a relative path — reject absolute URLs to prevent
+            // sending credentials (Authorization header) to external servers.
+            if (!url || !/^\/[^\/\\]/.test(url)) {
+              callback('Error: Tool call path must be a relative URL starting with /');
+              return;
+            }
+
             try {
               var pathParams = args.path_params || {};
               Object.keys(pathParams).forEach(function(key) {
@@ -3225,6 +3232,9 @@
                 url += (url.indexOf('?') >= 0 ? '&' : '?') + qs;
               }
             } catch (e) {}
+
+            // Prepend origin to ensure request stays on the same host
+            url = window.location.origin + url;
 
             var toolFetchHeaders = {};
             var tSettings = loadToolSettings();
@@ -3593,7 +3603,7 @@
   function _safeColor(val, fallback) { return _colorRe.test(val) ? val : fallback; }
 
   window.applyLLMTheme = function (themeName, customColors) {
-    var validatedTheme = THEME_DEFINITIONS[themeName] ? themeName : 'dark';
+    var validatedTheme = THEME_DEFINITIONS[themeName] ? themeName : 'light';
     var themeDef = THEME_DEFINITIONS[validatedTheme];
 
     var finalColors = Object.assign({}, themeDef, customColors);

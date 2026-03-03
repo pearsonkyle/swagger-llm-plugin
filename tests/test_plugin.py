@@ -1053,7 +1053,7 @@ def test_synthesizer_tool_call_format():
     assert "enableToolCalls" in js_content
     assert "tool_call_id" in js_content
     assert "tool_calls" in js_content
-    assert '"role": "tool"' in js_content or "'role': 'tool'" in js_content or "role: 'tool'" in js_content
+    assert "role: 'tool'" in js_content
 
 
 def test_synthesizer_output_system_prompt():
@@ -1073,7 +1073,7 @@ def test_synthesizer_jsonl_export():
     js_content = client.get("/docbuddy-static/llm-settings-plugin.js").text
 
     assert "exportAsJsonl" in js_content
-    assert "application/jsonl" in js_content
+    assert "application/x-ndjson" in js_content
     assert "handleExportData" in js_content
     assert "handleExportTopics" in js_content
 

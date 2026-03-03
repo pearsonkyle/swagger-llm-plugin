@@ -3637,7 +3637,7 @@
   function exportAsJsonl(data, filename) {
     try {
       var lines = data.map(function(item) { return JSON.stringify(item); });
-      var blob = new Blob([lines.join('\n')], { type: 'application/jsonl' });
+      var blob = new Blob([lines.join('\n')], { type: 'application/x-ndjson' });
       var url = URL.createObjectURL(blob);
       var a = document.createElement('a');
       a.href = url;
@@ -3980,7 +3980,9 @@
                           type: 'function',
                           function: {
                             name: parsed.tool_name,
-                            arguments: parsed.tool_arguments || {}
+                            arguments: typeof parsed.tool_arguments === 'string'
+                              ? parsed.tool_arguments
+                              : JSON.stringify(parsed.tool_arguments || {})
                           }
                         }]
                       });
@@ -4196,7 +4198,7 @@
           fontFamily: "'Consolas', 'Monaco', monospace",
           lineHeight: '1.6',
           whiteSpace: 'pre-wrap',
-          wordBreak: 'break-all',
+          wordBreak: 'break-word',
         };
 
         var checkboxRow = {

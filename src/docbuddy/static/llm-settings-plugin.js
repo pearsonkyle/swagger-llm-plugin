@@ -3690,29 +3690,47 @@
   }
 
   // ── Build default topic system prompt with OpenAPI context ────────────────
+  // ── Replace {openapi_context} placeholder with actual schema context ────────
+  function replaceOpenapiPlaceholder(text) {
+    if (!text || !text.includes('{openapi_context}')) return text;
+    if (_cachedOpenapiSchema) {
+      var context = buildOpenApiContext(_cachedOpenapiSchema);
+      return text.replace(/\{openapi_context\}/g, context);
+    }
+    return text.replace(/\{openapi_context\}/g, '(OpenAPI schema not yet loaded)');
+  }
+
   function buildDefaultTopicSystemPrompt() {
     var lines = [
-      'You are a topic generation assistant that creates structured, hierarchical topic trees.',
-      'Generate specific, diverse subtopics that form a clear learning hierarchy.',
+      'You are a topic generation assistant that creates structured, hierarchical topic trees for API training data.',
+      'Generate specific, diverse subtopics that cover the key operations, resources, and use cases of the API.',
+      'Focus on practical topics an AI agent would need to understand to effectively use the API.',
       'Return ONLY a JSON array of strings, no other text or formatting.',
       'Do not include markdown, bold markers, or links in the topic names.',
-      'Keep topics concise (under 80 characters each).'
+      'Keep topics concise (under 80 characters each).',
+      '',
+      '{openapi_context}'
     ];
-    if (_cachedOpenapiSchema) {
-      var info = _cachedOpenapiSchema.info || {};
-      lines.push('');
-      lines.push('Context: The topics should be relevant to the following API:');
-      lines.push('API: ' + (info.title || 'Unknown API'));
-      if (info.description) {
-        lines.push('Description: ' + info.description.substring(0, 300));
-      }
-      var paths = _cachedOpenapiSchema.paths || {};
-      var endpoints = Object.keys(paths).slice(0, 15);
-      if (endpoints.length > 0) {
-        lines.push('Endpoints: ' + endpoints.join(', '));
-      }
-    }
-    return lines.join('\n');
+    return replaceOpenapiPlaceholder(lines.join('\n'));
+  }
+
+  function buildDefaultGenSystemPrompt() {
+    return 'You are a synthetic training data generator for an AI agent that interacts with a REST API.\n' +
+      'Create realistic, diverse question-answer pairs that teach the agent how to use API endpoints.\n' +
+      'When generating tool calls, use realistic parameters and produce plausible API responses.\n\n' +
+      '{openapi_context}';
+  }
+
+  function buildDefaultGenInstructions() {
+    return 'Generate diverse, realistic examples of a user asking an AI assistant to perform API operations.\n' +
+      'Include a mix of simple queries (GET requests) and mutations (POST/PUT/DELETE).\n' +
+      'Vary the complexity: some should be single-step, others multi-parameter.\n' +
+      'The assistant should always use the api_request tool to fulfill the request.';
+  }
+
+  function buildDefaultOutputSystemPrompt() {
+    return 'You are a helpful API assistant. The user is looking at an API documentation page for an OpenAPI-compliant REST API.\n\n' +
+      '{openapi_context}';
   }
 
   // ── Synthesizer panel component ───────────────────────────────────────────
@@ -3735,13 +3753,13 @@
           summarizing: false,
 
           // Data generation
-          genSystemPrompt: saved.genSystemPrompt || '',
-          genInstructions: saved.genInstructions || '',
+          genSystemPrompt: saved.genSystemPrompt || buildDefaultGenSystemPrompt(),
+          genInstructions: saved.genInstructions || buildDefaultGenInstructions(),
           numSamples: saved.numSamples != null ? saved.numSamples : 4,
           batchSize: saved.batchSize != null ? saved.batchSize : 3,
           includeSystemMessage: saved.includeSystemMessage !== false,
-          enableToolCalls: saved.enableToolCalls || false,
-          outputSystemPrompt: saved.outputSystemPrompt || 'You are a helpful AI assistant that provides accurate and informative responses.',
+          enableToolCalls: saved.enableToolCalls !== false,
+          outputSystemPrompt: saved.outputSystemPrompt || buildDefaultOutputSystemPrompt(),
           generatedData: saved.generatedData || [],
           dataGenerating: false,
           dataProgress: '',
@@ -3763,10 +3781,20 @@
       componentDidMount() {
         var self = this;
         ensureOpenapiSchemaCached(function() {
-          // Update the default system prompt now that schema is available
+          // Update default prompts now that schema is available for {openapi_context}
           var saved = loadSynthSettings();
+          var updates = {};
           if (!saved || !saved.topicSystemPrompt) {
-            self.setState({ topicSystemPrompt: buildDefaultTopicSystemPrompt() });
+            updates.topicSystemPrompt = buildDefaultTopicSystemPrompt();
+          }
+          if (!saved || !saved.genSystemPrompt) {
+            updates.genSystemPrompt = buildDefaultGenSystemPrompt();
+          }
+          if (!saved || !saved.outputSystemPrompt) {
+            updates.outputSystemPrompt = buildDefaultOutputSystemPrompt();
+          }
+          if (Object.keys(updates).length > 0) {
+            self.setState(updates);
           }
         });
       }
@@ -3883,7 +3911,7 @@
         var depth = Math.max(1, Math.min(5, parseInt(this.state.topicDepth) || 3));
         var degree = Math.max(1, Math.min(10, parseInt(this.state.topicDegree) || 3));
         var rootPrompt = this.state.topicPrompt.trim();
-        var topicSysPrompt = this.state.topicSystemPrompt.trim() || buildDefaultTopicSystemPrompt();
+        var topicSysPrompt = replaceOpenapiPlaceholder(this.state.topicSystemPrompt.trim()) || buildDefaultTopicSystemPrompt();
 
         // Tree structure: root -> children, each with id and children list
         var nextId = 0;
@@ -3988,8 +4016,11 @@
         // Build system prompt with OpenAPI context for generation
         var selectedPreset = loadFromStorage().systemPromptPreset || 'api_assistant';
         var apiSystemPrompt = getSystemPromptForPreset(selectedPreset, _cachedOpenapiSchema);
-        var genSysPrompt = this.state.genSystemPrompt.trim() ||
-          'You are a synthetic training data generator. Create realistic, diverse question-answer pairs.';
+        // Replace {openapi_context} in all user-facing prompts at send time
+        var genSysPrompt = replaceOpenapiPlaceholder(this.state.genSystemPrompt.trim()) ||
+          'You are a synthetic training data generator for an AI agent. Create realistic, diverse question-answer pairs.';
+        var resolvedOutputSystemPrompt = replaceOpenapiPlaceholder(outputSystemPrompt) || apiSystemPrompt;
+        var resolvedGenInstructions = replaceOpenapiPlaceholder(genInstructions);
 
         // Build OpenAPI context for tool call generation
         var openapiContext = '';
@@ -4033,19 +4064,18 @@
               var userPrompt;
               if (enableToolCalls && toolDef) {
                 userPrompt = 'Generate a realistic training example where a user asks about "' + topic + '" ' +
-                  'and the assistant needs to use the api_request tool to answer.\n\n' +
-                  'API Context:\n' + openapiContext.substring(0, 2000) + '\n\n' +
+                  'and the assistant uses the api_request tool to fulfill the request.\n\n' +
                   'Available tool:\n' + JSON.stringify(toolDef, null, 2) + '\n\n' +
-                  (genInstructions ? 'Instructions: ' + genInstructions + '\n\n' : '') +
+                  (resolvedGenInstructions ? 'Instructions: ' + resolvedGenInstructions + '\n\n' : '') +
                   'Return ONLY a JSON object with these fields:\n' +
-                  '- "user_message": the user\'s question (string)\n' +
-                  '- "tool_name": the tool function name to call (string)\n' +
-                  '- "tool_arguments": the arguments object for the tool call (object)\n' +
-                  '- "tool_result": a realistic JSON response from the tool (string)\n' +
-                  '- "assistant_response": the assistant\'s final natural-language answer (string)';
+                  '- "user_message": the user\'s natural-language request (string)\n' +
+                  '- "tool_name": "api_request" (string)\n' +
+                  '- "tool_arguments": arguments object with "method", "path", and optionally "query_params", "path_params", "body" (object)\n' +
+                  '- "tool_result": a realistic JSON response the API would return (string)\n' +
+                  '- "assistant_response": the assistant\'s final natural-language answer summarizing the result (string)';
               } else {
                 userPrompt = 'Generate a training example about: "' + topic + '"\n\n' +
-                  (genInstructions ? 'Instructions: ' + genInstructions + '\n\n' : '') +
+                  (resolvedGenInstructions ? 'Instructions: ' + resolvedGenInstructions + '\n\n' : '') +
                   (openapiContext ? 'API Context (for reference):\n' + openapiContext.substring(0, 2000) + '\n\n' : '') +
                   'Return ONLY a JSON object with these fields:\n' +
                   '- "user_message": a realistic user question (string)\n' +
@@ -4068,7 +4098,7 @@
                     if (includeSystem) {
                       messages.push({
                         role: 'system',
-                        content: outputSystemPrompt || apiSystemPrompt
+                        content: resolvedOutputSystemPrompt
                       });
                     }
 
@@ -4457,10 +4487,13 @@
             React.createElement('textarea', {
               value: s.topicSystemPrompt,
               onChange: function(e) { self.setState({ topicSystemPrompt: e.target.value }); },
-              placeholder: 'System prompt for topic generation (includes OpenAPI context when available)',
+              placeholder: 'System prompt for topic generation',
               style: Object.assign({}, textareaStyle, { minHeight: '80px' }),
               disabled: isGenerating
             }),
+            React.createElement('div', {
+              style: { color: 'var(--theme-text-secondary)', fontSize: '10px', marginTop: '4px' }
+            }, 'Use {openapi_context} to insert your API schema. It is replaced at send time.'),
 
             // Buttons
             React.createElement('div', null,
@@ -4502,28 +4535,34 @@
             React.createElement('textarea', {
               value: s.genSystemPrompt,
               onChange: function(e) { self.setState({ genSystemPrompt: e.target.value }); },
-              placeholder: 'System prompt for the generation LLM (leave blank for default)',
+              placeholder: 'System prompt for the generation LLM',
               style: textareaStyle,
               disabled: isGenerating
             }),
+            React.createElement('div', {
+              style: { color: 'var(--theme-text-secondary)', fontSize: '10px', marginTop: '4px' }
+            }, 'Use {openapi_context} to insert your API schema. It is replaced at send time.'),
 
-            React.createElement('label', { style: labelStyle }, 'Instructions'),
+            React.createElement('label', { style: labelStyle }, 'Generation Instructions'),
             React.createElement('textarea', {
               value: s.genInstructions,
               onChange: function(e) { self.setState({ genInstructions: e.target.value }); },
-              placeholder: 'e.g. Create diverse questions and detailed answers suitable for learning.',
+              placeholder: 'Additional instructions for training data generation',
               style: textareaStyle,
               disabled: isGenerating
             }),
 
-            React.createElement('label', { style: labelStyle }, 'Output System Prompt (goes into training data)'),
+            React.createElement('label', { style: labelStyle }, 'Output System Prompt (embedded in each training example)'),
             React.createElement('textarea', {
               value: s.outputSystemPrompt,
               onChange: function(e) { self.setState({ outputSystemPrompt: e.target.value }); },
-              placeholder: 'System prompt that will be included in each training example',
+              placeholder: 'System prompt included in each generated training example',
               style: textareaStyle,
               disabled: isGenerating
             }),
+            React.createElement('div', {
+              style: { color: 'var(--theme-text-secondary)', fontSize: '10px', marginTop: '4px' }
+            }, 'Use {openapi_context} to insert your API schema. It is replaced at export/generation time.'),
 
             React.createElement('div', { style: inlineRow },
               React.createElement('div', null,

@@ -1168,3 +1168,55 @@ def test_synthesizer_tree_export_format():
     assert "node.id" in js_content
     assert "node.children" in js_content
     assert "AbortController" in js_content
+
+
+def test_synthesizer_openapi_context_placeholder():
+    """Verify synthesizer supports {openapi_context} placeholder in prompts."""
+    client = TestClient(make_app())
+
+    js_content = client.get("/docbuddy-static/llm-settings-plugin.js").text
+
+    assert "replaceOpenapiPlaceholder" in js_content
+    assert "{openapi_context}" in js_content
+    # Hint text should tell user about the placeholder
+    assert "replaced at send time" in js_content
+
+
+def test_synthesizer_prefilled_gen_system_prompt():
+    """Verify synthesizer pre-fills the generation system prompt."""
+    client = TestClient(make_app())
+
+    js_content = client.get("/docbuddy-static/llm-settings-plugin.js").text
+
+    assert "buildDefaultGenSystemPrompt" in js_content
+    assert "synthetic training data generator" in js_content
+
+
+def test_synthesizer_prefilled_output_system_prompt():
+    """Verify synthesizer pre-fills the output system prompt with API context."""
+    client = TestClient(make_app())
+
+    js_content = client.get("/docbuddy-static/llm-settings-plugin.js").text
+
+    assert "buildDefaultOutputSystemPrompt" in js_content
+    assert "helpful API assistant" in js_content
+
+
+def test_synthesizer_prefilled_gen_instructions():
+    """Verify synthesizer pre-fills generation instructions for tool calls."""
+    client = TestClient(make_app())
+
+    js_content = client.get("/docbuddy-static/llm-settings-plugin.js").text
+
+    assert "buildDefaultGenInstructions" in js_content
+    assert "api_request tool" in js_content
+
+
+def test_synthesizer_tool_calls_enabled_by_default():
+    """Verify tool calling is enabled by default in synthesizer."""
+    client = TestClient(make_app())
+
+    js_content = client.get("/docbuddy-static/llm-settings-plugin.js").text
+
+    # enableToolCalls should default to true (not false)
+    assert "enableToolCalls: saved.enableToolCalls !== false" in js_content

@@ -22,7 +22,6 @@
       var LLMSettingsPanel = system.getComponent("LLMSettingsPanel", true);
       var ChatPanel = system.getComponent("ChatPanel", true);
       var WorkflowPanel = system.getComponent("WorkflowPanel", true);
-      var SynthesizerPanel = system.getComponent("SynthesizerPanel", true);
 
       // Get saved tab preference, default to "api"
       var savedTab = localStorage.getItem(TAB_STORAGE_KEY) || "api";
@@ -77,6 +76,21 @@
         };
       }, []);
 
+      // Track whether workflow is actively streaming (for tab indicator)
+      var _workflowStreamState = React.useState(false);
+      var workflowStreaming = _workflowStreamState[0];
+      var setWorkflowStreaming = _workflowStreamState[1];
+
+      React.useEffect(function () {
+        var handler = function (e) {
+          setWorkflowStreaming(e.detail && e.detail.streaming);
+        };
+        window.addEventListener('docbuddy-workflow-streaming', handler);
+        return function () {
+          window.removeEventListener('docbuddy-workflow-streaming', handler);
+        };
+      }, []);
+
       // Tab styles for 3 tabs (theme-aware)
       var tabStyle = function (tab) {
         return {
@@ -91,8 +105,8 @@
         };
       };
 
-      // Content area style - full height for chat, settings, workflow, and synthesizer
-      var isContained = activeTab === "chat" || activeTab === "settings" || activeTab === "workflow" || activeTab === "synthesizer";
+      // Content area style - full height for chat, settings, and workflow
+      var isContained = activeTab === "chat" || activeTab === "settings" || activeTab === "workflow";
       var contentStyle = {
         border: "1px solid var(--theme-border-color)",
         borderTop: "none",
@@ -155,13 +169,22 @@
             React.createElement(
               "button",
               { role: "tab", "aria-selected": activeTab === "workflow", onClick: function () { setActiveTab("workflow"); }, style: tabStyle("workflow") },
-              "Workflow"
-            ),
-            // Synthesizer tab
-            React.createElement(
-              "button",
-              { role: "tab", "aria-selected": activeTab === "synthesizer", onClick: function () { setActiveTab("synthesizer"); }, style: tabStyle("synthesizer") },
-              "Synthesizer"
+              "Workflow",
+              workflowStreaming && activeTab !== "workflow"
+                ? React.createElement("span", {
+                    style: {
+                      display: "inline-block",
+                      width: "6px",
+                      height: "6px",
+                      borderRadius: "50%",
+                      background: "#10b981",
+                      marginLeft: "6px",
+                      animation: "docbuddy-pulse 1.4s infinite ease-in-out",
+                      verticalAlign: "middle"
+                    },
+                    title: "Streaming in progress"
+                  })
+                : null
             ),
             // Settings tab
             React.createElement(
@@ -187,11 +210,6 @@
           // Workflow tab content (always mounted, hidden via CSS to preserve streaming state across tab switches)
           React.createElement("div", { style: { display: activeTab === "workflow" ? "block" : "none", height: "100%" } },
             React.createElement(WorkflowPanel, null)
-          ),
-
-          // Synthesizer tab content (always mounted, hidden via CSS to preserve state across tab switches)
-          React.createElement("div", { style: { display: activeTab === "synthesizer" ? "block" : "none", height: "100%" } },
-            React.createElement(SynthesizerPanel, null)
           ),
 
           // LLM Settings tab content

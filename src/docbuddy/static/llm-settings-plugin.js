@@ -3703,8 +3703,15 @@
   function buildDefaultTopicSystemPrompt() {
     var lines = [
       'You are a topic generation assistant that creates structured, hierarchical topic trees for API training data.',
-      'Generate specific, diverse subtopics that cover the key operations, resources, and use cases of the API.',
-      'Focus on practical topics an AI agent would need to understand to effectively use the API.',
+      'Generate specific, diverse subtopics covering the full range of API capabilities, including:',
+      '- Core CRUD operations for each resource type',
+      '- Authentication, authorization, and permission scenarios',
+      '- Filtering, sorting, pagination, and search patterns',
+      '- Error handling and edge cases (invalid input, missing resources, conflicts)',
+      '- Multi-step workflows involving multiple endpoints or resources',
+      '- Batch operations and bulk actions where the API supports them',
+      'Balance coverage across these categories — do not cluster around happy-path read operations.',
+      'Focus on topics that represent real tasks an AI agent would be asked to perform.',
       'Return ONLY a JSON array of strings, no other text or formatting.',
       'Do not include markdown, bold markers, or links in the topic names.',
       'Keep topics concise (under 80 characters each).',
@@ -3715,21 +3722,34 @@
   }
 
   function buildDefaultGenSystemPrompt() {
-    return 'You are a synthetic training data generator for an AI agent that interacts with a REST API.\n' +
-      'Create realistic, diverse question-answer pairs that teach the agent how to use API endpoints.\n' +
-      'When generating tool calls, use realistic parameters and produce plausible API responses.\n\n' +
+    return 'You are a synthetic training data generator for fine-tuning an AI agent that uses a REST API.\n' +
+      'Your goal is to produce high-quality, realistic training examples that teach the agent to:\n' +
+      '- Understand natural language requests and map them to the correct API endpoints\n' +
+      '- Select the right HTTP method and construct valid parameters and request bodies\n' +
+      '- Interpret API responses and communicate results clearly to the user\n' +
+      '- Handle errors gracefully (404s, validation errors, permission denials)\n' +
+      'Use realistic user language — mix casual phrasing, technical requests, and occasionally ambiguous queries.\n' +
+      'When generating tool calls, use realistic sample data that matches the field types and constraints in the schema.\n' +
+      'Produce well-structured, plausible API responses that reflect real-world data for this API.\n\n' +
       '{openapi_context}';
   }
 
   function buildDefaultGenInstructions() {
-    return 'Generate diverse, realistic examples of a user asking an AI assistant to perform API operations.\n' +
-      'Include a mix of simple queries (GET requests) and mutations (POST/PUT/DELETE).\n' +
-      'Vary the complexity: some should be single-step, others multi-parameter.\n' +
-      'The assistant should always use the api_request tool to fulfill the request.';
+    return 'Generate a realistic training example of a user asking an AI assistant to perform an API operation.\n' +
+      'Follow these guidelines:\n' +
+      '- Use natural, varied user language — some messages casual, some technical, some ambiguous\n' +
+      '- Include a mix of read operations (GET) and write operations (POST/PUT/PATCH/DELETE)\n' +
+      '- Vary complexity: some single-step requests, some requiring multiple parameters or chained logic\n' +
+      '- Occasionally generate error scenarios: resource not found, invalid input, permission denied\n' +
+      '- The assistant must use the api_request tool to fulfill the request — never fabricate a response\n' +
+      '- After receiving the tool result, the assistant response should be concise and address the original request directly';
   }
 
   function buildDefaultOutputSystemPrompt() {
-    return 'You are a helpful API assistant. The user is looking at an API documentation page for an OpenAPI-compliant REST API.\n\n' +
+    return 'You are a helpful API assistant. You help users interact with a REST API by making API calls on their behalf using the api_request tool.\n' +
+      'Always use the api_request tool to fulfill requests — never guess or fabricate API responses.\n' +
+      'After receiving a tool result, summarize the outcome clearly and concisely for the user.\n' +
+      'If an operation fails, explain the error and suggest how to resolve it.\n\n' +
       '{openapi_context}';
   }
 

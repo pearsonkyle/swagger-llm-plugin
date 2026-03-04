@@ -3764,7 +3764,8 @@
         var self = this;
         ensureOpenapiSchemaCached(function() {
           // Update the default system prompt now that schema is available
-          if (!loadSynthSettings() || !loadSynthSettings().topicSystemPrompt) {
+          var saved = loadSynthSettings();
+          if (!saved || !saved.topicSystemPrompt) {
             self.setState({ topicSystemPrompt: buildDefaultTopicSystemPrompt() });
           }
         });

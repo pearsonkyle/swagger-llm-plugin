@@ -63,5 +63,10 @@ uvicorn examples.demo_server:app --reload --host 0.0.0.0 --port 3333
 
 ```bash
 pip install -e ".[dev]"
+
 pytest tests/
+pre-commit run --all-files
+
+hatch run test
+hatch run format
 ```

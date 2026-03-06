@@ -35,6 +35,9 @@ dev = [
     "uvicorn[standard]>=0.20.0",
     "pytest>=7.0.0",
     "httpx>=0.23.0",
+    "pre-commit",
+    "ruff",
+    "mypy",
 ]
 
 [project.urls]
@@ -46,3 +49,15 @@ packages = ["src/docbuddy"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[tool.hatch.envs.default]
+dependencies = [
+    "pre-commit",
+    "ruff",
+    "mypy",
+]
+
+[tool.hatch.envs.default.scripts]
+format = "pre-commit run --all-files"
+lint = "pre-commit run --all-files"
+test = "pytest tests/ -v"

@@ -1,5 +1,8 @@
 # Documentation Buddy
 
+[![CI](https://github.com/pearsonkyle/swagger-llm-ui/actions/workflows/ci.yml/badge.svg)](https://github.com/pearsonkyle/swagger-llm-ui/actions/workflows/ci.yml)
+
+
 > Add an AI assistant to your `/docs` page.
 
 ![](examples/example.gif)
@@ -36,7 +39,7 @@ Ask questions like:
   - "Create a curl cmd for adding a new user"
   - "Ping health"
 
-Enable tool calling in the settings to allow the assistant to make API requests on your behalf. 
+Enable tool calling in the settings to allow the assistant to make API requests on your behalf.
 
 ![](examples/tools.png)
 

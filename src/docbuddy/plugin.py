@@ -118,14 +118,14 @@ def setup_docs(
 
         # Filter routes while avoiding concurrent modification issues
         original_routes = list(app.router.routes)
-        
+
         # Build set of paths to remove - handle potential None values
         paths_to_remove = {docs_url}
         if app.docs_url:
             paths_to_remove.add(app.docs_url)
         if app.redoc_url:
             paths_to_remove.add(app.redoc_url)
-            
+
         # Filter routes more safely to avoid issues with different route types
         new_routes = []
         for r in original_routes:
@@ -134,7 +134,7 @@ def setup_docs(
                 if r.path in paths_to_remove:
                     continue
             new_routes.append(r)
-        
+
         app.router.routes = new_routes
         app.docs_url = None
         app.redoc_url = None

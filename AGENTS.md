@@ -14,7 +14,7 @@ This file provides guidance to AI coding assistants when working with code in th
 
 Since locally-hosted LLMs support CORS, the browser talks to them directly, eliminating:
 - The server proxy endpoint
-- All `X-LLM-*` header machinery  
+- All `X-LLM-*` header machinery
 - The `httpx` dependency
 
 Users configure LLM credentials in-browser; those are persisted in localStorage and used directly by the browser to call the LLM's `/chat/completions` endpoint.

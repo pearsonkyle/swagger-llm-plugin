@@ -1,6 +1,5 @@
 """Tests for docbuddy package."""
 
-import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -18,6 +17,7 @@ DOCBUDDY_JS_FILES = [
     "workflow.js",
     "plugin.js",
 ]
+
 
 def get_all_plugin_js(client):
     """Get concatenated content of all docbuddy plugin JS files."""
@@ -143,6 +143,7 @@ def test_get_swagger_ui_html_includes_openapi_url():
 def test_get_swagger_ui_html_includes_debug_flag():
     """The rendered HTML should support debug mode."""
     from fastapi.responses import HTMLResponse
+
     resp = get_swagger_ui_html(openapi_url="/openapi.json", title="T", debug=True)
     assert isinstance(resp, HTMLResponse)
 
@@ -271,7 +272,6 @@ def test_route_cleanup_thread_safety():
 def test_concurrent_app_setup():
     """Test that setting up multiple apps concurrently doesn't cause issues."""
     import threading
-    import time
 
     results = []
 
@@ -626,6 +626,7 @@ def test_no_httpx_dependency():
 
     # The plugin module should not import httpx
     import inspect
+
     source = inspect.getsource(plugin)
 
     # httpx should not be mentioned
@@ -701,7 +702,9 @@ def test_template_theme_injection():
 
     # Check for our template's key elements
     assert "docbuddy-static" in html, "Template should include our static files"
-    assert "applyLLMTheme" in html or "/docbuddy-static/themes/" in html, "Template should include theme injection"
+    assert (
+        "applyLLMTheme" in html or "/docbuddy-static/themes/" in html
+    ), "Template should include theme injection"
 
 
 def test_template_script_order():
@@ -850,7 +853,10 @@ def test_workflow_styles_injected():
 
     # Check for workflow panel related content
     assert "WorkflowPanel" in js_content or "llm-workflow" in js_content.lower()
-    assert "var(--theme-border-color)" in js_content or "theme-border" in js_content.lower()
+    assert (
+        "var(--theme-border-color)" in js_content
+        or "theme-border" in js_content.lower()
+    )
     assert "var(--theme-primary)" in js_content or "theme-primary" in js_content.lower()
 
 
@@ -934,7 +940,10 @@ def test_tool_call_post_content_type():
     # handleExecuteToolCall should set Content-Type for body-bearing methods
     assert "fetchHeaders['Content-Type'] = 'application/json'" in js_content
     # Body should be included for POST, PUT, and PATCH
-    assert "s.editMethod === 'POST' || s.editMethod === 'PUT' || s.editMethod === 'PATCH'" in js_content
+    assert (
+        "s.editMethod === 'POST' || s.editMethod === 'PUT' || s.editMethod === 'PATCH'"
+        in js_content
+    )
 
 
 def test_tool_call_panel_all_methods():
@@ -1053,7 +1062,9 @@ def test_workflow_tab_css_persistence():
     # Should use display-based hiding for WorkflowPanel
     assert 'display: activeTab === "workflow"' in js_content
     # Should NOT have the old conditional pattern
-    assert 'activeTab === "workflow" ? React.createElement(WorkflowPanel' not in js_content
+    assert (
+        'activeTab === "workflow" ? React.createElement(WorkflowPanel' not in js_content
+    )
 
 
 def test_chat_scroll_on_tab_return():
@@ -1131,3 +1142,330 @@ def test_workflow_mobile_scroll_support():
 
     # Should have webkit touch scrolling for mobile
     assert "WebkitOverflowScrolling: 'touch'" in js_content
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# CRITICAL COVERAGE — added after refactor audit
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ── setup_docs: parameter forwarding & route management ────────────────────────
+
+
+def test_setup_docs_default_title_includes_app_name():
+    """Default title should contain the FastAPI app's title."""
+    app = FastAPI(title="My Pet Store")
+    setup_docs(app)
+    client = TestClient(app)
+    html = client.get("/docs").text
+    assert "My Pet Store" in html
+
+
+def test_setup_docs_custom_title_appears_in_html():
+    """Explicit title= kwarg should appear verbatim in the served HTML."""
+    app = FastAPI(title="Ignored Title")
+    setup_docs(app, title="Overridden Docs Title")
+    client = TestClient(app)
+    html = client.get("/docs").text
+    assert "Overridden Docs Title" in html
+
+
+def test_setup_docs_custom_openapi_url_in_html():
+    """Custom openapi_url kwarg should be embedded in the served HTML."""
+    app = FastAPI(title="Schema URL Test")
+    setup_docs(app, openapi_url="/api/v2/schema")
+    client = TestClient(app)
+    html = client.get("/docs").text
+    assert "/api/v2/schema" in html
+
+
+def test_setup_docs_resolves_app_openapi_url():
+    """When openapi_url is not passed, setup_docs should fall back to app.openapi_url."""
+    app = FastAPI(title="App Schema", openapi_url="/custom/openapi.json")
+    setup_docs(app)
+    client = TestClient(app)
+    html = client.get("/docs").text
+    assert "/custom/openapi.json" in html
+
+
+def test_setup_docs_custom_swagger_js_url_in_html():
+    """Custom swagger_js_url should appear as a script src in the rendered page."""
+    custom_js = "https://example.com/swagger-ui-bundle.js"
+    app = FastAPI(title="CDN Test")
+    setup_docs(app, swagger_js_url=custom_js)
+    client = TestClient(app)
+    html = client.get("/docs").text
+    assert custom_js in html
+
+
+def test_setup_docs_custom_swagger_css_url_in_html():
+    """Custom swagger_css_url should appear as a link href in the rendered page."""
+    custom_css = "https://example.com/swagger-ui.css"
+    app = FastAPI(title="CSS CDN Test")
+    setup_docs(app, swagger_css_url=custom_css)
+    client = TestClient(app)
+    html = client.get("/docs").text
+    assert custom_css in html
+
+
+def test_setup_docs_custom_theme_url_in_html():
+    """Custom theme_css_url should appear as a link href in the rendered page."""
+    custom_theme = "/docbuddy-static/themes/dark-theme.css"
+    app = FastAPI(title="Theme Test")
+    setup_docs(app, theme_css_url=custom_theme)
+    client = TestClient(app)
+    html = client.get("/docs").text
+    assert custom_theme in html
+
+
+def test_setup_docs_idempotent():
+    """Calling setup_docs twice on the same app must not duplicate the docs route."""
+    app = FastAPI(title="Idempotent Test")
+    setup_docs(app)
+    setup_docs(app)  # Second call should be a no-op
+
+    client = TestClient(app)
+    assert client.get("/docs").status_code == 200
+
+    # Exactly one /docs route should be registered (no duplicates)
+    docs_routes = [r for r in app.router.routes if getattr(r, "path", None) == "/docs"]
+    assert len(docs_routes) == 1
+
+
+def test_setup_docs_removes_default_docs_route():
+    """FastAPI's built-in /docs route should be replaced, not left alongside ours."""
+    app = FastAPI(title="Route Removal Test")
+    # Before setup_docs, FastAPI registers its own /docs route
+    setup_docs(app)
+
+    # app.docs_url should be nulled out by setup_docs
+    assert app.docs_url is None
+
+
+def test_setup_docs_removes_redoc_route():
+    """setup_docs should also remove FastAPI's /redoc route."""
+    app = FastAPI(title="Redoc Removal Test")
+    setup_docs(app)
+
+    assert app.redoc_url is None
+    client = TestClient(app)
+    assert client.get("/redoc").status_code == 404
+
+
+def test_setup_docs_preserves_user_routes():
+    """setup_docs must not remove user-defined application routes."""
+    app = FastAPI(title="User Routes Test")
+
+    @app.get("/items")
+    def list_items():
+        return []
+
+    @app.get("/users/{user_id}")
+    def get_user(user_id: int):
+        return {"id": user_id}
+
+    setup_docs(app)
+    client = TestClient(app)
+
+    assert client.get("/items").status_code == 200
+    assert client.get("/users/42").status_code == 200
+
+
+def test_setup_docs_static_mount_only_once():
+    """The /docbuddy-static mount should appear exactly once even across multiple apps."""
+    # Creating two separate apps should each mount their own static; neither
+    # should interfere with the other.
+    app1 = FastAPI(title="App One")
+    app2 = FastAPI(title="App Two")
+    setup_docs(app1)
+    setup_docs(app2)
+
+    mounts1 = [
+        r for r in app1.router.routes if getattr(r, "name", None) == "docbuddy-static"
+    ]
+    mounts2 = [
+        r for r in app2.router.routes if getattr(r, "name", None) == "docbuddy-static"
+    ]
+
+    assert len(mounts1) == 1
+    assert len(mounts2) == 1
+
+
+# ── get_swagger_ui_html: rendering correctness ────────────────────────────────
+
+
+def test_get_swagger_ui_html_custom_js_cdn_in_output():
+    """Custom swagger_js_url must appear in the rendered HTML body."""
+    custom_js = "https://mycdn.example.com/swagger-ui-bundle.js"
+    resp = get_swagger_ui_html(
+        openapi_url="/openapi.json",
+        title="CDN Check",
+        swagger_js_url=custom_js,
+    )
+    assert custom_js in resp.body.decode()
+
+
+def test_get_swagger_ui_html_custom_css_cdn_in_output():
+    """Custom swagger_css_url must appear in the rendered HTML body."""
+    custom_css = "https://mycdn.example.com/swagger-ui.css"
+    resp = get_swagger_ui_html(
+        openapi_url="/openapi.json",
+        title="CSS CDN Check",
+        swagger_css_url=custom_css,
+    )
+    assert custom_css in resp.body.decode()
+
+
+def test_get_swagger_ui_html_custom_js_sri_in_output():
+    """Custom swagger_js_sri hash must appear as an integrity attribute."""
+    custom_sri = "sha384-AAABBBCCC000111222333"
+    resp = get_swagger_ui_html(
+        openapi_url="/openapi.json",
+        title="SRI Check",
+        swagger_js_sri=custom_sri,
+    )
+    assert custom_sri in resp.body.decode()
+
+
+def test_get_swagger_ui_html_custom_css_sri_in_output():
+    """Custom swagger_css_sri hash must appear as an integrity attribute."""
+    custom_sri = "sha384-ZZZYYYXXX999888777666"
+    resp = get_swagger_ui_html(
+        openapi_url="/openapi.json",
+        title="CSS SRI Check",
+        swagger_css_sri=custom_sri,
+    )
+    assert custom_sri in resp.body.decode()
+
+
+def test_get_swagger_ui_html_custom_theme_url_in_output():
+    """Custom theme_css_url must appear in the rendered HTML body."""
+    custom_theme = "/docbuddy-static/themes/dark-theme.css"
+    resp = get_swagger_ui_html(
+        openapi_url="/openapi.json",
+        title="Theme Check",
+        theme_css_url=custom_theme,
+    )
+    assert custom_theme in resp.body.decode()
+
+
+def test_get_swagger_ui_html_debug_mode_returns_valid_html():
+    """debug=True must still produce a valid HTMLResponse with swagger content."""
+    from fastapi.responses import HTMLResponse
+
+    resp = get_swagger_ui_html(openapi_url="/openapi.json", title="Debug", debug=True)
+    assert isinstance(resp, HTMLResponse)
+    body = resp.body.decode()
+    assert "swagger" in body.lower()
+    assert "/openapi.json" in body
+
+
+# ── Template structural integrity ─────────────────────────────────────────────
+
+
+def test_template_dompurify_loaded():
+    """DOMPurify CDN script must be present — its absence is a security regression."""
+    client = TestClient(make_app())
+    html = client.get("/docs").text
+    assert "dompurify" in html.lower()
+
+
+def test_template_markedjs_loaded():
+    """marked.js CDN script must be present for markdown rendering."""
+    client = TestClient(make_app())
+    html = client.get("/docs").text
+    assert "marked" in html.lower()
+
+
+def test_template_fouc_prevention_script():
+    """The inline FOUC-prevention <script> must inject docbuddy-theme-styles."""
+    client = TestClient(make_app())
+    html = client.get("/docs").text
+    assert "docbuddy-theme-styles" in html
+
+
+def test_template_swagger_ui_initialization_block():
+    """The page must contain the SwaggerUIBundle() initialization call."""
+    client = TestClient(make_app())
+    html = client.get("/docs").text
+    assert "SwaggerUIBundle(" in html
+    assert 'dom_id: "#swagger-ui"' in html
+
+
+def test_template_llm_docs_layout_configured():
+    """The SwaggerUIBundle init must specify LLMDocsLayout as the layout."""
+    client = TestClient(make_app())
+    html = client.get("/docs").text
+    assert 'layout: "LLMDocsLayout"' in html
+
+
+def test_template_docbuddy_plugin_registered():
+    """DocBuddyPlugin must be listed in the plugins array."""
+    client = TestClient(make_app())
+    html = client.get("/docs").text
+    assert "DocBuddyPlugin" in html
+
+
+def test_template_crossorigin_attributes_present():
+    """CDN resources must carry crossorigin='anonymous' for SRI to work."""
+    client = TestClient(make_app())
+    html = client.get("/docs").text
+    assert 'crossorigin="anonymous"' in html
+
+
+def test_template_integrity_attributes_present():
+    """CDN resources must carry integrity= attributes for subresource integrity."""
+    client = TestClient(make_app())
+    html = client.get("/docs").text
+    assert "integrity=" in html
+
+
+# ── Essential static file serving ─────────────────────────────────────────────
+
+
+def test_static_file_404_for_nonexistent():
+    """Requesting a nonexistent file from /docbuddy-static should return 404."""
+    client = TestClient(make_app())
+    response = client.get("/docbuddy-static/nonexistent-file-xyz.js")
+    assert response.status_code == 404
+
+
+def test_system_prompt_config_served():
+    """system-prompt-config.json must be served and be valid JSON with presets."""
+
+    client = TestClient(make_app())
+    response = client.get("/docbuddy-static/system-prompt-config.json")
+    assert response.status_code == 200
+
+    data = response.json()
+    assert "presets" in data
+    assert "api_assistant" in data["presets"]
+
+
+def test_dark_theme_css_served():
+    """dark-theme.css must be accessible from /docbuddy-static/themes/."""
+    client = TestClient(make_app())
+    response = client.get("/docbuddy-static/themes/dark-theme.css")
+    assert response.status_code == 200
+    assert "css" in response.headers.get("content-type", "").lower()
+
+
+def test_light_theme_css_served():
+    """light-theme.css must be accessible from /docbuddy-static/themes/."""
+    client = TestClient(make_app())
+    response = client.get("/docbuddy-static/themes/light-theme.css")
+    assert response.status_code == 200
+    assert "css" in response.headers.get("content-type", "").lower()
+
+
+def test_swagger_overrides_css_served():
+    """swagger-overrides.css must be accessible from /docbuddy-static/themes/."""
+    client = TestClient(make_app())
+    response = client.get("/docbuddy-static/themes/swagger-overrides.css")
+    assert response.status_code == 200
+
+
+def test_favicon_served():
+    """favicon.ico must be accessible from /docbuddy-static/."""
+    client = TestClient(make_app())
+    response = client.get("/docbuddy-static/favicon.ico")
+    assert response.status_code == 200

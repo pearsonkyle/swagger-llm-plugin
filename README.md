@@ -9,14 +9,6 @@
 
 > Add an AI assistant to your `/docs` page.
 
-![](examples/example.gif)
-
-## Features
-
-- 💬 AI chat assistant with full OpenAPI context
-- 🤖 LLM Settings panel with local providers (Ollama, LM Studio, vLLM, Custom)
-- 🔗 Tool-calling for API Requests
-- 🎨 Dark/light theme support
 
 ## Installation
 
@@ -36,7 +28,24 @@ setup_docs(app)  # replaces default /docs
 
 That's it! Visit `/docs`
 
-## Using the Chat Assistant
+| API Explorer | Chat Interface |
+|--------------|----------------|
+| ![API Explorer](examples/api.png) | ![Chat Interface with Tools](examples/tools.png) |
+
+| Workflow Panel | LLM Settings |
+|---------------|--------------|
+| ![Workflow Panel](examples/workflow.png) | ![LLM Settings](examples/settings.png) |
+
+
+## Features
+
+- 💬 Chat interface with full OpenAPI context
+- 🤖 LLM Settings panel with local providers (Ollama, LM Studio, vLLM, Custom)
+- 🔗 Tool-calling for API Requests
+- 🎨 Dark/light theme support
+
+
+## Using the Chat
 
 Ask questions like:
   - "What endpoints are available?"
@@ -45,9 +54,7 @@ Ask questions like:
 
 Enable tool calling in the settings to allow the assistant to make API requests on your behalf.
 
-![](examples/tools.png)
-
-## Configure LLM Settings
+## LLM Settings
 
 - **Provider**: Choose your local LLM provider (Ollama, LM Studio, vLLM, or Custom)
 - **API URL**: Enter the API endpoint for your LLM (e.g. `http://localhost:1234/v1` for LMStudio)

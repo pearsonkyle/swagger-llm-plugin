@@ -4,33 +4,23 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from datetime import date
 import threading
+import os
+import sys
 
+# Allow running from the repo root without installing the package
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-# Import docbuddy locally to allow running from repo root without installing
-def _get_setup_docs():
-    """Lazy import helper for development."""
-    import sys
-    import os
-
-    # Allow running from the repo root without installing the package
-    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-
-    from docbuddy import setup_docs
-
-    return setup_docs
-
-
-setup_docs = _get_setup_docs()
+from docbuddy import setup_docs  # noqa: E402
 
 app = FastAPI(
     title="Demo API",
-    version="0.4.0",
+    version="0.1.0",
     description="""
 A demonstration of LLM-enhanced API documentation using [docbuddy](https://github.com/pearsonkyle/docbuddy).
 
 
 ## Features
-- 💬 AI chat assistant with full OpenAPI context
+- 💬 Chat interface with full OpenAPI context
 - 🤖 LLM Settings with local providers (Ollama, LM Studio, vLLM, Custom)
 - 🔗 Tool-calling for API Requests
 - 🎨 Dark/light theme support
@@ -50,7 +40,6 @@ from docbuddy import setup_docs
 app = FastAPI()
 setup_docs(app)  # replaces default /docs
 ```
-
 """,
 )
 

@@ -110,15 +110,28 @@
         var self = this;
         var s = this.state;
 
+        // Get tool settings for target API authentication
+        var toolSettings = DB.loadToolSettings();
+        var toolApiKey = toolSettings.apiKey && typeof toolSettings.apiKey === 'string' ? toolSettings.apiKey.trim() : '';
+
         var executedArgs = {
           method: s.editMethod || 'GET',
           path: s.editPath || '',
+          query_params: JSON.parse(s.editQueryParams || '{}'),
+          path_params: JSON.parse(s.editPathParams || '{}'),
         };
-        try { executedArgs.query_params = JSON.parse(s.editQueryParams || '{}'); } catch (e) { executedArgs.query_params = {}; }
-        try { executedArgs.path_params = JSON.parse(s.editPathParams || '{}'); } catch (e) { executedArgs.path_params = {}; }
+
         if (s.editMethod === 'POST' || s.editMethod === 'PUT' || s.editMethod === 'PATCH') {
           try { executedArgs.body = JSON.parse(s.editBody || '{}'); } catch (e) { executedArgs.body = {}; }
         }
+
+        // Build headers to send to proxy
+        var fetchHeaders = {};
+        if (toolApiKey) {
+          fetchHeaders['Authorization'] = 'Bearer ' + toolApiKey;
+        }
+
+        executedArgs.headers = fetchHeaders;
 
         if (self._pendingToolCallMsg) {
           var toolMsg = Object.assign({}, self._pendingToolCallMsg, {
@@ -138,78 +151,35 @@
           self._pendingToolCallMsg = null;
         }
 
-        var url = s.editPath;
-
-        if (!url || !/^\//.test(url) || /\.\./.test(url)) {
-          console.error('[Tool Call] Rejected invalid path:', url);
-          var rejectObj = { status: 0, statusText: 'Blocked', body: 'Tool call path must be a relative URL starting with / and must not contain ".."' };
-          self.setState({ toolCallResponse: rejectObj });
-          self.sendToolResult(rejectObj);
-          return;
-        }
-
-        try {
-          var pathParams = JSON.parse(s.editPathParams || '{}');
-          Object.keys(pathParams).forEach(function(key) {
-            url = url.replace('{' + key + '}', encodeURIComponent(pathParams[key]));
-          });
-        } catch (e) { console.warn('Failed to parse path params:', e); }
-
-        try {
-          var queryParams = JSON.parse(s.editQueryParams || '{}');
-          var queryKeys = Object.keys(queryParams);
-          if (queryKeys.length > 0) {
-            var qs = queryKeys.map(function(k) {
-              return encodeURIComponent(k) + '=' + encodeURIComponent(queryParams[k]);
-            }).join('&');
-            url += (url.indexOf('?') >= 0 ? '&' : '?') + qs;
-          }
-        } catch (e) { console.warn('Failed to parse query params:', e); }
-
-        url = window.location.origin + url;
-
-        var fetchHeaders = {};
-        var toolSettings = DB.loadToolSettings();
-        var toolApiKey = toolSettings.apiKey && typeof toolSettings.apiKey === 'string' ? toolSettings.apiKey.trim() : '';
-        if (toolApiKey) {
-          fetchHeaders['Authorization'] = 'Bearer ' + toolApiKey;
-        }
-
-        var hasBody = (s.editMethod === 'POST' || s.editMethod === 'PUT' || s.editMethod === 'PATCH') && s.editBody;
-        if (hasBody) {
-          fetchHeaders['Content-Type'] = 'application/json';
-        }
-
-        var fetchOpts = {
-          method: s.editMethod,
-          headers: fetchHeaders,
+        // Send tool call to proxy endpoint for server-side validation
+        var payload = {
+          method: executedArgs.method,
+          path: executedArgs.path,
+          query_params: executedArgs.query_params,
+          path_params: executedArgs.path_params,
+          body: executedArgs.body,
+          headers: executedArgs.headers || {}
         };
-
-        if (hasBody) {
-          try {
-            JSON.parse(s.editBody);
-          } catch (e) {
-            var parseErrObj = { status: 0, statusText: 'Invalid JSON', body: 'Request body is not valid JSON: ' + e.message };
-            self.setState({ toolCallResponse: parseErrObj });
-            self.sendToolResult(parseErrObj);
-            return;
-          }
-          fetchOpts.body = s.editBody;
-        }
 
         self.setState({ toolCallResponse: { status: 'loading', body: '' } });
 
-        fetch(url, fetchOpts)
+        fetch('/docbuddy-proxy/tool-call', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(payload)
+        })
           .then(function(res) {
-            return res.text().then(function(text) {
-              var responseObj = { status: res.status, statusText: res.statusText, body: text };
-              self.setState({ toolCallResponse: responseObj });
-              self.sendToolResult(responseObj);
-            });
+            return res.json();
+          })
+          .then(function(responseObj) {
+            self.setState({ toolCallResponse: responseObj });
+            self.sendToolResult(responseObj);
           })
           .catch(function(err) {
-            var responseObj = { status: 0, statusText: 'Network Error', body: err.message };
-            console.error('[Tool Call Error]', err.message);
+            var responseObj = { status: 0, statusText: 'Proxy Error', body: err.message };
+            console.error('[Tool Call Proxy Error]', err.message);
             self.setState({ toolCallResponse: responseObj });
             self.sendToolResult(responseObj);
           });

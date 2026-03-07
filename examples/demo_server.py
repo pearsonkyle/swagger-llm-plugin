@@ -4,23 +4,14 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from datetime import date
 import threading
+import sys
+import os
 
+# Add src directory to path for docbuddy import
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src")) # noqa: E402
 
-# Import docbuddy locally to allow running from repo root without installing
-def _get_setup_docs():
-    """Lazy import helper for development."""
-    import sys
-    import os
+from docbuddy import setup_docs
 
-    # Allow running from the repo root without installing the package
-    sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-
-    from docbuddy import setup_docs
-
-    return setup_docs
-
-
-setup_docs = _get_setup_docs()
 
 app = FastAPI(
     title="Demo API",

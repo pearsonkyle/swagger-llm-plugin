@@ -1,14 +1,16 @@
 """Core plugin logic: functions to mount the custom LLM-enhanced Swagger UI docs."""
 
+import re
 import threading
 import weakref
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader
+from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.routing import Route
 
 
@@ -25,6 +27,34 @@ _llm_apps: weakref.WeakSet = weakref.WeakSet()
 
 # Module-level Jinja2 environment (reused across requests)
 _jinja_env = Environment(loader=FileSystemLoader(str(_TEMPLATES_DIR)), autoescape=True)
+
+# Security headers middleware - added to app in setup_docs
+_SECURITY_HEADERS_ADDED = "_docbuddy_security_headers_added"
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Add security headers to all responses."""
+
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+
+        # Content Security Policy - allows same-origin and localhost for LLM connections
+        csp = (
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline' cdn.jsdelivr.net; "
+            "style-src 'self' 'unsafe-inline' cdn.jsdelivr.net; "
+            "img-src 'self' data:; "
+            "font-src 'self' data:; "
+            f"connect-src 'self' {request.url.hostname}:* http://localhost:* https://*;"
+        )
+
+        response.headers["Content-Security-Policy"] = csp
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Permissions-Policy"] = "geolocation=(), microphone=()"
+
+        return response
 
 
 def get_swagger_ui_html(
@@ -177,3 +207,151 @@ def setup_docs(
             theme_css_url=theme_css_url,
             debug=debug,
         )
+
+    # Register security middlewares (only once per app)
+    if not getattr(app, _SECURITY_HEADERS_ADDED, False):
+        setattr(app, _SECURITY_HEADERS_ADDED, True)
+        # Add middleware in reverse order of execution
+        app.add_middleware(LLMToolCallProxyMiddleware)
+        app.add_middleware(SecurityHeadersMiddleware)
+
+
+# ── Security Middleware for Tool Call Proxy ─────────────────────────────────────
+
+
+class LLMToolCallProxyMiddleware(BaseHTTPMiddleware):
+    """Middleware to proxy tool calls through a secure endpoint with path validation.
+
+    This prevents client-side path traversal attacks by routing all tool call
+    API requests through this server-side proxy that validates paths.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        # Handle tool call proxy endpoint
+        if request.url.path == "/docbuddy-proxy/tool-call":
+            return await self._handle_tool_call_proxy(request)
+
+        return await call_next(request)
+
+    async def _handle_tool_call_proxy(self, request: Request) -> JSONResponse:
+        """Proxy tool calls with server-side path validation."""
+        try:
+            body = await request.json()
+        except Exception:
+            return JSONResponse(status_code=400, content={"error": "Invalid JSON body"})
+
+        # Extract required fields
+        method = body.get("method", "GET").upper()
+        url = body.get("path", "")
+        query_params = body.get("query_params", {})
+        path_params = body.get("path_params", {})
+        request_body = body.get("body")
+        headers = body.get("headers", {})
+
+        # Validate method
+        allowed_methods = {"GET", "POST", "PUT", "PATCH", "DELETE"}
+        if method not in allowed_methods:
+            return JSONResponse(
+                status_code=400, content={"error": f"Invalid HTTP method: {method}"}
+            )
+
+        # Validate path - MUST start with / and be a relative path
+        if not url or not isinstance(url, str):
+            return JSONResponse(status_code=400, content={"error": "Path is required"})
+
+        # Path must start with /
+        if not url.startswith("/"):
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Path must be relative and start with /"},
+            )
+
+        # Check for path traversal
+        if ".." in url:
+            return JSONResponse(
+                status_code=400, content={"error": "Path traversal detected"}
+            )
+
+        # Normalize the path (remove duplicate slashes)
+        url = re.sub(r"/+", "/", url)
+
+        # Only allow same-origin requests to prevent SSRF
+        # The URL should be relative, so we prepend the origin
+        full_url = f"{request.url.scheme}://{request.url.hostname}{url}"
+
+        # Additional validation: ensure no scheme in the path
+        if "://" in url or url.startswith("//"):
+            return JSONResponse(
+                status_code=400, content={"error": "Absolute URLs not allowed"}
+            )
+
+        # Build query string
+        import urllib.parse
+
+        if query_params:
+            qs = urllib.parse.urlencode(query_params, doseq=True)
+            full_url += f"?{qs}"
+
+        # Validate and apply path parameters
+        if path_params:
+            try:
+                for key, value in path_params.items():
+                    # Sanitize path parameter values
+                    sanitized_value = str(value).replace("/", "%2F")
+                    full_url = full_url.replace(f"{{{key}}}", sanitized_value)
+            except Exception as e:
+                return JSONResponse(
+                    status_code=400,
+                    content={"error": f"Invalid path parameters: {str(e)}"},
+                )
+
+        # Prepare headers for the proxied request
+        proxy_headers = {"Content-Type": "application/json"}
+
+        # Copy authorization if provided (for target API authentication)
+        if "Authorization" in headers:
+            proxy_headers["Authorization"] = headers["Authorization"]
+
+        # Add body only for requests that support it
+        import httpx
+
+        request_kwargs = {
+            "method": method,
+            "url": full_url,
+            "headers": proxy_headers,
+            "follow_redirects": True,
+            "timeout": 30.0,
+        }
+
+        if request_body and method in {"POST", "PUT", "PATCH"}:
+            try:
+                # Validate body is JSON-serializable
+                import json
+
+                json.dumps(request_body)  # Test serialization
+                request_kwargs["json"] = request_body
+            except Exception as e:
+                return JSONResponse(
+                    status_code=400,
+                    content={"error": f"Invalid request body: {str(e)}"},
+                )
+
+        try:
+            async with httpx.AsyncClient() as client:
+                response = await client.request(**request_kwargs)
+
+                # Return the response from the target API
+                return JSONResponse(
+                    status_code=response.status_code,
+                    content={
+                        "status": response.status_code,
+                        "statusText": response.reason_phrase,
+                        "body": response.text,
+                    },
+                )
+        except httpx.TimeoutException:
+            return JSONResponse(status_code=504, content={"error": "Request timeout"})
+        except httpx.RequestError as e:
+            return JSONResponse(
+                status_code=502, content={"error": f"Failed to connect: {str(e)}"}
+            )

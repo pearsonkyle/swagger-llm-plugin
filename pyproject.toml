@@ -28,6 +28,7 @@ classifiers = [
 dependencies = [
     "fastapi>=0.95.0",
     "jinja2>=3.0.0",
+    "httpx>=0.24.0",
 ]
 
 [project.optional-dependencies]

@@ -361,62 +361,54 @@
           function executeToolCall(tc, toolCallsList, callback) {
             var args = {};
             try { args = JSON.parse(tc.function.arguments || '{}'); } catch (e) { console.warn('Failed to parse tool call arguments:', e); }
-            var method = args.method || 'GET';
-            var url = args.path || '';
 
-            if (!url || !/^\//.test(url) || /\.\./.test(url)) {
-              callback('Error: Tool call path must be a relative URL starting with / and must not contain ".."');
+            // Get tool settings for target API authentication
+            var tSettings = DB.loadToolSettings();
+            var toolApiKey = tSettings.apiKey && typeof tSettings.apiKey === 'string' ? tSettings.apiKey.trim() : '';
+
+            // Build payload for proxy endpoint
+            var payload = {
+              method: args.method || 'GET',
+              path: args.path || '',
+              query_params: args.query_params || {},
+              path_params: args.path_params || {},
+              body: args.body,
+              headers: {}
+            };
+
+            if (toolApiKey) {
+              payload.headers['Authorization'] = 'Bearer ' + toolApiKey;
+            }
+
+            // Validate required fields client-side for early rejection
+            var url = payload.path;
+            if (!url || !/^\//.test(url)) {
+              callback('Error: Tool call path must be a relative URL starting with /');
               return;
             }
 
-            try {
-              var pathParams = args.path_params || {};
-              Object.keys(pathParams).forEach(function(key) {
-                url = url.replace('{' + key + '}', encodeURIComponent(pathParams[key]));
-              });
-            } catch (e) { console.warn('Failed to apply path params:', e); }
-
-            try {
-              var queryParams = args.query_params || {};
-              var queryKeys = Object.keys(queryParams);
-              if (queryKeys.length > 0) {
-                var qs = queryKeys.map(function(k) {
-                  return encodeURIComponent(k) + '=' + encodeURIComponent(queryParams[k]);
-                }).join('&');
-                url += (url.indexOf('?') >= 0 ? '&' : '?') + qs;
-              }
-            } catch (e) { console.warn('Failed to apply query params:', e); }
-
-            url = window.location.origin + url;
-
-            var toolFetchHeaders = {};
-            var tSettings = DB.loadToolSettings();
-            var toolApiKey = tSettings.apiKey && typeof tSettings.apiKey === 'string' ? tSettings.apiKey.trim() : '';
-            if (toolApiKey) {
-              toolFetchHeaders['Authorization'] = 'Bearer ' + toolApiKey;
+            // Path traversal check (client-side, but proxy also validates)
+            if (/\.\./.test(url)) {
+              callback('Error: Tool call path traversal detected');
+              return;
             }
 
-            var hasBody = args.body && (method === 'POST' || method === 'PUT' || method === 'PATCH');
-            if (hasBody) {
-              toolFetchHeaders['Content-Type'] = 'application/json';
-            }
-
-            var fetchOpts = { method: method, headers: toolFetchHeaders };
-            if (hasBody) {
-              fetchOpts.body = JSON.stringify(args.body);
-            }
-
-            if (self._abortController) {
-              fetchOpts.signal = self._abortController.signal;
-            }
-
-            fetch(url, fetchOpts)
+            fetch('/docbuddy-proxy/tool-call', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload),
+              signal: self._abortController ? self._abortController.signal : null
+            })
               .then(function(res) {
                 if (self.state.aborted) { callback('(aborted)'); return; }
-                return res.text().then(function(text) {
-                  if (self.state.aborted) { callback('(aborted)'); return; }
-                  callback('Status: ' + res.status + ' ' + res.statusText + '\n\n' + text.substring(0, 4000));
-                });
+                return res.json();
+              })
+              .then(function(responseObj) {
+                if (self.state.aborted) { callback('(aborted)'); return; }
+                var textBody = typeof responseObj.body === 'string'
+                  ? responseObj.body
+                  : JSON.stringify(responseObj.body);
+                callback('Status: ' + responseObj.status + ' ' + (responseObj.statusText || '') + '\n\n' + textBody.substring(0, 4000));
               })
               .catch(function(err) {
                 if (err && err.name === 'AbortError') { callback('(aborted)'); return; }

@@ -289,7 +289,23 @@
               placeholder: "sk-...",
               style: inputStyle,
               onChange: this.handleApiKeyChange,
-            })
+            }),
+            React.createElement(
+              "div",
+              {
+                style: {
+                  color: "#f59e0b",
+                  fontSize: "10px",
+                  marginTop: "4px",
+                  padding: "6px",
+                  background: "rgba(245, 158, 11, 0.1)",
+                  borderRadius: "3px"
+                }
+              },
+              React.createElement("span", { style: { fontWeight: "500" }, dangerouslySetInnerHTML: {
+                __html: "<strong>⚠️ Warning:</strong> API keys are stored in browser localStorage and may be accessible to any script running on this page."
+              }})
+            )
           ),
           React.createElement(
             "div",

@@ -575,6 +575,10 @@
               paddingTop: "16px",
               borderTop: "1px solid var(--theme-border-color)",
               textAlign: "center",
+              display: "flex",
+              justifyContent: "center",
+              gap: "16px",
+              flexWrap: "wrap",
             },
           },
           React.createElement(
@@ -607,7 +611,28 @@
             React.createElement(
               "span",
               { style: { color: "var(--theme-primary)" } },
-              "View on GitHub →"
+              "GitHub"
+            )
+          ),
+          React.createElement(
+            "a",
+            {
+              href: "https://pypi.org/project/docbuddy/",
+              target: "_blank",
+              rel: "noopener noreferrer",
+              style: {
+                color: "var(--theme-text-secondary)",
+                fontSize: "12px",
+                textDecoration: "none",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "6px",
+              },
+            },
+            React.createElement(
+              "span",
+              { style: { color: "var(--theme-primary)" } },
+              "PyPI"
             )
           )
         );

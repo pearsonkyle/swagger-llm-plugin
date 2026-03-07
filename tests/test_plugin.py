@@ -1144,6 +1144,17 @@ def test_workflow_mobile_scroll_support():
     assert "WebkitOverflowScrolling: 'touch'" in js_content
 
 
+def test_workflow_single_block_run():
+    """Verify handleRunSingleBlock method exists in workflow JS for per-block execution."""
+    client = TestClient(make_app())
+    js_content = get_all_plugin_js(client)
+
+    assert "handleRunSingleBlock" in js_content
+    assert "runningSingleBlock" in js_content
+    # Should validate prior blocks have output
+    assert "has not been run yet" in js_content
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # CRITICAL COVERAGE — added after refactor audit
 # ═══════════════════════════════════════════════════════════════════════════════

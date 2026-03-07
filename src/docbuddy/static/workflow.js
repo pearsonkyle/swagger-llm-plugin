@@ -31,6 +31,7 @@
           currentBlockIdx: -1,
           aborted: false,
           copiedBlockId: null,
+          runningSingleBlock: false,
         };
         this._abortController = null;
         this.handleStart = this.handleStart.bind(this);
@@ -40,6 +41,7 @@
         this.handleRemoveBlock = this.handleRemoveBlock.bind(this);
         this.handleBlockContentChange = this.handleBlockContentChange.bind(this);
         this.handleToggleBlockTools = this.handleToggleBlockTools.bind(this);
+        this.handleRunSingleBlock = this.handleRunSingleBlock.bind(this);
         this.runWorkflow = this.runWorkflow.bind(this);
       }
 
@@ -99,6 +101,48 @@
         });
       }
 
+      handleRunSingleBlock(idx) {
+        var self = this;
+        var blocks = self.state.blocks;
+        var block = blocks[idx];
+        if (!block || !block.content || !block.content.trim()) return;
+        if (self.state.running) return;
+
+        // Validate all prior blocks have output
+        for (var i = 0; i < idx; i++) {
+          if (!blocks[i].output || !blocks[i].output.trim()) {
+            alert('Cannot run Block ' + (idx + 1) + ': Block ' + (i + 1) + ' has not been run yet. Run all blocks first or run earlier blocks individually.');
+            return;
+          }
+        }
+
+        // Build conversation history from prior blocks' stored outputs
+        var prebuiltHistory = [];
+        for (var j = 0; j < idx; j++) {
+          prebuiltHistory.push({ role: 'user', content: blocks[j].content || '' });
+          prebuiltHistory.push({ role: 'assistant', content: blocks[j].output || '' });
+        }
+
+        if (self._abortController) {
+          self._abortController.abort();
+          self._abortController = null;
+        }
+        window.dispatchEvent(new CustomEvent('docbuddy-workflow-streaming', { detail: { streaming: true } }));
+
+        // Clear only the target block's output/status
+        var updatedBlocks = blocks.slice();
+        updatedBlocks[idx] = Object.assign({}, updatedBlocks[idx], { output: '', status: 'idle' });
+        self.setState({
+          blocks: updatedBlocks,
+          running: true,
+          aborted: false,
+          currentBlockIdx: idx,
+          runningSingleBlock: true,
+        }, function() {
+          self.runWorkflow(idx, idx + 1, prebuiltHistory);
+        });
+      }
+
       handleStart() {
         var self = this;
         var hasContent = self.state.blocks.some(function(b) { return b.content && b.content.trim(); });
@@ -113,6 +157,7 @@
             running: true,
             aborted: false,
             currentBlockIdx: 0,
+            runningSingleBlock: false,
             blocks: prev.blocks.map(function(b) {
               return Object.assign({}, b, { output: '', status: 'idle' });
             })
@@ -127,7 +172,7 @@
           this._abortController.abort();
         }
         window.dispatchEvent(new CustomEvent('docbuddy-workflow-streaming', { detail: { streaming: false } }));
-        this.setState({ running: false, aborted: true, currentBlockIdx: -1 });
+        this.setState({ running: false, aborted: true, currentBlockIdx: -1, runningSingleBlock: false });
       }
 
       handleReset() {
@@ -141,19 +186,22 @@
           running: false,
           currentBlockIdx: -1,
           aborted: false,
+          runningSingleBlock: false,
         });
         DB.saveWorkflow({ blocks: [defaultBlock] });
       }
 
-      runWorkflow() {
+      runWorkflow(startIdx, endIdx, initialHistory) {
         var self = this;
-        var conversationHistory = [];
+        var conversationHistory = initialHistory || [];
+        var firstIdx = startIdx || 0;
+        var stopIdx = (endIdx != null) ? endIdx : self.state.blocks.length;
 
         function runBlock(idx) {
           var currentBlocks = self.state.blocks;
-          if (idx >= currentBlocks.length || self.state.aborted) {
+          if (idx >= stopIdx || self.state.aborted) {
             window.dispatchEvent(new CustomEvent('docbuddy-workflow-streaming', { detail: { streaming: false } }));
-            self.setState({ running: false, currentBlockIdx: -1 });
+            self.setState({ running: false, currentBlockIdx: -1, runningSingleBlock: false });
             return;
           }
 
@@ -364,8 +412,9 @@
             var method = args.method || 'GET';
             var url = args.path || '';
 
-            if (!url || !/^\//.test(url) || /\.\./.test(url)) {
-              callback('Error: Tool call path must be a relative URL starting with / and must not contain ".."');
+            try { url = decodeURIComponent(url); } catch (e) {}
+            if (!url || !/^\//.test(url)) {
+              callback('Error: Tool call path must be a relative URL starting with /');
               return;
             }
 
@@ -374,6 +423,11 @@
               Object.keys(pathParams).forEach(function(key) {
                 url = url.replace('{' + key + '}', encodeURIComponent(pathParams[key]));
               });
+              // Re-validate after path params substitution to prevent bypass via path param values
+              if (/\.\./.test(url)) {
+                callback('Error: Tool call path must not contain ".."');
+                return;
+              }
             } catch (e) { console.warn('Failed to apply path params:', e); }
 
             try {
@@ -425,6 +479,11 @@
           }
 
           function finishBlock(output, historyMessages) {
+            // Include the user message for this block in conversation history
+            // so that subsequent blocks maintain proper user/assistant alternation
+            // (required by LM Studio, OpenAI, and most LLM providers)
+            conversationHistory.push({ role: 'user', content: block.content || '' });
+
             if (historyMessages && historyMessages.length > 0) {
               // Include all tool call messages in conversation history
               historyMessages.forEach(function(msg) {
@@ -449,7 +508,7 @@
           }
         }
 
-        runBlock(0);
+        runBlock(firstIdx);
       }
 
       render() {
@@ -546,7 +605,10 @@
             }, '⬇ Export'),
             s.running ? React.createElement('span', {
               style: { fontSize: '12px', color: 'var(--theme-text-secondary)', marginLeft: 'auto' }
-            }, 'Running block ' + (s.currentBlockIdx + 1) + ' of ' + s.blocks.length + '…') : null
+            }, s.runningSingleBlock
+              ? 'Running block ' + (s.currentBlockIdx + 1) + '…'
+              : 'Running block ' + (s.currentBlockIdx + 1) + ' of ' + s.blocks.length + '…'
+            ) : null
           ),
           React.createElement(
             'div',
@@ -608,37 +670,75 @@
                             textTransform: 'uppercase',
                           }
                         }, 'Block ' + (idx + 1)),
-                        globalToolsEnabled ? React.createElement('span', {
-                          onClick: !s.running ? function() { self.handleToggleBlockTools(block.id); } : null,
-                          style: {
-                            fontSize: '10px',
-                            fontWeight: '600',
-                            color: '#fff',
-                            background: block.enableTools !== false ? '#10b981' : '#6b7280',
-                            padding: '2px 8px',
-                            borderRadius: '4px',
-                            cursor: s.running ? 'default' : 'pointer',
-                            opacity: s.running ? 0.7 : 1,
-                            userSelect: 'none',
-                            transition: 'all 0.2s ease',
-                          },
-                          title: block.enableTools !== false ? 'Tools enabled — click to disable' : 'Tools disabled — click to enable'
-                        }, block.enableTools !== false ? 'Tools ✓' : 'Tools ✗') : null,
                         statusBadge
                       ),
-                      !s.running ? React.createElement('button', {
-                        onClick: function() { self.handleRemoveBlock(block.id); },
-                        style: {
-                          background: 'transparent',
-                          border: 'none',
-                          color: isActive ? '#fff' : 'var(--theme-text-secondary)',
-                          cursor: 'pointer',
-                          fontSize: '14px',
-                          padding: '2px 6px',
-                          borderRadius: '4px',
-                        },
-                        title: 'Remove block'
-                      }, '✕') : null
+                      React.createElement(
+                        'div',
+                        { style: { display: 'flex', alignItems: 'center', gap: '4px' } },
+                        globalToolsEnabled ? React.createElement('button', {
+                          onClick: !s.running ? function() { self.handleToggleBlockTools(block.id); } : null,
+                          style: {
+                            background: 'transparent',
+                            border: '1px solid ' + (block.enableTools !== false ? '#10b981' : 'var(--theme-border-color)'),
+                            color: block.enableTools !== false ? '#10b981' : 'var(--theme-text-secondary)',
+                            cursor: s.running ? 'default' : 'pointer',
+                            fontSize: '12px',
+                            padding: '4px 10px',
+                            borderRadius: '4px',
+                            opacity: s.running ? 0.5 : 1,
+                            transition: 'all 0.2s ease',
+                            height: '28px',
+                            minWidth: '34px',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            boxSizing: 'border-box',
+                          },
+                          title: block.enableTools !== false ? 'Tools enabled — click to disable' : 'Tools disabled — click to enable'
+                        }, '\u{1F527}') : null,
+                        !s.running ? React.createElement('button', {
+                          onClick: function() { self.handleRunSingleBlock(idx); },
+                          disabled: !block.content || !block.content.trim(),
+                          style: {
+                            background: 'transparent',
+                            border: '1px solid #10b981',
+                            color: '#10b981',
+                            cursor: (!block.content || !block.content.trim()) ? 'not-allowed' : 'pointer',
+                            fontSize: '12px',
+                            padding: '4px 10px',
+                            borderRadius: '4px',
+                            opacity: (!block.content || !block.content.trim()) ? 0.4 : 1,
+                            transition: 'all 0.2s ease',
+                            height: '28px',
+                            minWidth: '34px',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            boxSizing: 'border-box',
+                          },
+                          title: 'Run this block only'
+                        }, '▶') : null,
+                        !s.running ? React.createElement('button', {
+                          onClick: function() { self.handleRemoveBlock(block.id); },
+                          style: {
+                            background: 'transparent',
+                            border: '1px solid var(--theme-border-color)',
+                            color: isActive ? '#fff' : 'var(--theme-text-secondary)',
+                            cursor: 'pointer',
+                            fontSize: '12px',
+                            padding: '4px 10px',
+                            borderRadius: '4px',
+                            transition: 'all 0.2s ease',
+                            height: '28px',
+                            minWidth: '34px',
+                            display: 'inline-flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            boxSizing: 'border-box',
+                          },
+                          title: 'Remove block'
+                        }, '✕') : null
+                      )
                     ),
                     React.createElement('textarea', {
                       value: block.content,

@@ -381,20 +381,54 @@
     return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;').replace(/\n/g, '<br>');
   }
 
+  // Register DOMPurify hook to force rel="noopener noreferrer" on links
+  // with target="_blank" (prevents tabnapping via window.opener) while
+  // preserving any existing rel directives (e.g., "nofollow").
+  var _domPurifyHooksRegistered = false;
+  function _ensureDomPurifyHooks() {
+    if (_domPurifyHooksRegistered || typeof DOMPurify === 'undefined') return;
+    DOMPurify.addHook('afterSanitizeAttributes', function(node) {
+      if (node.tagName === 'A') {
+        var target = node.getAttribute('target');
+        if (target && target.toLowerCase() === '_blank') {
+          var existingRel = node.getAttribute('rel') || '';
+          var tokens = existingRel ? existingRel.split(/\s+/) : [];
+          var relSet = {};
+          for (var i = 0; i < tokens.length; i++) {
+            if (tokens[i]) {
+              relSet[tokens[i]] = true;
+            }
+          }
+          relSet.noopener = true;
+          relSet.noreferrer = true;
+          var combined = [];
+          for (var key in relSet) {
+            if (Object.prototype.hasOwnProperty.call(relSet, key)) {
+              combined.push(key);
+            }
+          }
+          node.setAttribute('rel', combined.join(' '));
+        }
+      }
+    });
+    _domPurifyHooksRegistered = true;
+  }
+
   function parseMarkdown(text) {
     if (!text || typeof text !== 'string') return '';
     if (typeof DOMPurify === 'undefined') {
       console.error('DOMPurify not loaded — refusing to render markdown. Falling back to plain text.');
       return _escapeHtml(text);
     }
+    _ensureDomPurifyHooks();
     try {
       if (marked) {
         var html = marked.parse(text);
         var sanitized = DOMPurify.sanitize(html, {
           ALLOWED_TAGS: ['p', 'br', 'strong', 'b', 'em', 'i', 'u', 'a', 'code', 'pre',
             'blockquote', 'ul', 'ol', 'li', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
-            'table', 'thead', 'tbody', 'tr', 'th', 'td', 'hr', 'span', 'div', 'img', 'del', 'sup', 'sub'],
-          ALLOWED_ATTR: ['href', 'target', 'rel', 'class', 'id', 'src', 'alt', 'title', 'width', 'height'],
+            'table', 'thead', 'tbody', 'tr', 'th', 'td', 'hr', 'span', 'div', 'del', 'sup', 'sub'],
+          ALLOWED_ATTR: ['href', 'target', 'rel', 'class', 'id', 'alt', 'title'],
           ALLOW_DATA_ATTR: false
         });
         if (/<script[\s>]/i.test(sanitized) || /\bon[a-z]+\s*=/i.test(sanitized)) {

@@ -6,6 +6,9 @@
 
   var DocBuddy = window.DocBuddy = {};
 
+  // Configurable base path for static assets (allows standalone/GitHub Pages usage)
+  var STATIC_BASE = window.DOCBUDDY_STATIC_BASE || '/docbuddy-static';
+
   // ── System Prompt Preset Configuration (load from JSON) ───────────────────
   var SYSTEM_PROMPT_CONFIG = null;
   var _systemPromptConfigPromise = null;
@@ -15,7 +18,7 @@
 
     // Start async fetch if not already in progress
     if (!_systemPromptConfigPromise) {
-      _systemPromptConfigPromise = fetch('/docbuddy-static/system-prompt-config.json')
+      _systemPromptConfigPromise = fetch(STATIC_BASE + '/system-prompt-config.json')
         .then(function(res) {
           if (!res.ok) throw new Error('HTTP ' + res.status);
           return res.json();
@@ -495,7 +498,7 @@
       return;
     }
     if (!DocBuddy._openapiSchemaFetchPromise) {
-      DocBuddy._openapiSchemaFetchPromise = fetch("/openapi.json")
+      DocBuddy._openapiSchemaFetchPromise = fetch(window.DOCBUDDY_OPENAPI_URL || "/openapi.json")
         .then(function(res) { return res.json(); })
         .then(function(schema) {
           DocBuddy._cachedOpenapiSchema = schema;

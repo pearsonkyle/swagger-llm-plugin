@@ -1660,3 +1660,120 @@ def test_all_tabs_present():
     assert '"workflow"' in js_content
     assert '"agent"' in js_content
     assert '"settings"' in js_content
+
+
+# ── Configurable base path tests ─────────────────────────────────────────────
+
+
+def test_core_js_uses_configurable_static_base():
+    """Verify core.js uses DOCBUDDY_STATIC_BASE for static asset paths."""
+    client = TestClient(make_app())
+    js_content = client.get("/docbuddy-static/core.js").text
+
+    assert "DOCBUDDY_STATIC_BASE" in js_content
+    assert "STATIC_BASE" in js_content
+
+
+def test_core_js_uses_configurable_openapi_url():
+    """Verify core.js uses DOCBUDDY_OPENAPI_URL for schema fetching."""
+    client = TestClient(make_app())
+    js_content = client.get("/docbuddy-static/core.js").text
+
+    assert "DOCBUDDY_OPENAPI_URL" in js_content
+
+
+def test_core_js_defaults_to_docbuddy_static():
+    """Verify core.js defaults to /docbuddy-static when DOCBUDDY_STATIC_BASE is not set."""
+    client = TestClient(make_app())
+    js_content = client.get("/docbuddy-static/core.js").text
+
+    assert "'/docbuddy-static'" in js_content
+
+
+def test_core_js_defaults_to_openapi_json():
+    """Verify core.js defaults to /openapi.json when DOCBUDDY_OPENAPI_URL is not set."""
+    client = TestClient(make_app())
+    js_content = client.get("/docbuddy-static/core.js").text
+
+    assert '"/openapi.json"' in js_content
+
+
+# ── Standalone page tests ─────────────────────────────────────────────────────
+
+
+def test_standalone_page_exists():
+    """Verify docs/index.html exists."""
+    from pathlib import Path
+
+    docs_path = Path(__file__).parent.parent / "docs" / "index.html"
+    assert docs_path.exists(), "docs/index.html should exist for GitHub Pages"
+
+
+def test_standalone_page_contains_swagger_ui():
+    """Verify standalone page loads Swagger UI from CDN."""
+    from pathlib import Path
+
+    html = (Path(__file__).parent.parent / "docs" / "index.html").read_text()
+    assert "swagger-ui-bundle" in html
+    assert "SwaggerUIBundle" in html
+
+
+def test_standalone_page_contains_docbuddy_scripts():
+    """Verify standalone page loads all DocBuddy JS files."""
+    from pathlib import Path
+
+    html = (Path(__file__).parent.parent / "docs" / "index.html").read_text()
+    for f in DOCBUDDY_JS_FILES:
+        assert f in html, f"Standalone page should reference {f}"
+
+
+def test_standalone_page_sets_static_base():
+    """Verify standalone page configures DOCBUDDY_STATIC_BASE."""
+    from pathlib import Path
+
+    html = (Path(__file__).parent.parent / "docs" / "index.html").read_text()
+    assert "DOCBUDDY_STATIC_BASE" in html
+
+
+def test_standalone_page_has_url_input():
+    """Verify standalone page has URL input and load button."""
+    from pathlib import Path
+
+    html = (Path(__file__).parent.parent / "docs" / "index.html").read_text()
+    assert 'id="url-input"' in html
+    assert "handleLoad" in html
+
+
+def test_standalone_page_has_example_links():
+    """Verify standalone page includes example API links."""
+    from pathlib import Path
+
+    html = (Path(__file__).parent.parent / "docs" / "index.html").read_text()
+    assert "petstore" in html.lower()
+    assert "loadUrl" in html
+
+
+def test_standalone_page_supports_url_parameter():
+    """Verify standalone page reads ?url= query parameter."""
+    from pathlib import Path
+
+    html = (Path(__file__).parent.parent / "docs" / "index.html").read_text()
+    assert "URLSearchParams" in html
+    assert "url" in html
+
+
+def test_standalone_page_has_dompurify():
+    """Verify standalone page includes DOMPurify for security."""
+    from pathlib import Path
+
+    html = (Path(__file__).parent.parent / "docs" / "index.html").read_text()
+    assert "dompurify" in html.lower()
+
+
+def test_standalone_page_has_docbuddy_plugin():
+    """Verify standalone page registers DocBuddyPlugin."""
+    from pathlib import Path
+
+    html = (Path(__file__).parent.parent / "docs" / "index.html").read_text()
+    assert "DocBuddyPlugin" in html
+    assert "LLMDocsLayout" in html

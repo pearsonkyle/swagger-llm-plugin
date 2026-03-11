@@ -491,22 +491,36 @@
   // ── In-memory cache for OpenAPI schema ────────────────────────────────────
   DocBuddy._cachedOpenapiSchema = null;
   DocBuddy._openapiSchemaFetchPromise = null;
+  DocBuddy._schemaFetchUrl = null;
 
   function ensureOpenapiSchemaCached(onDone) {
-    if (DocBuddy._cachedOpenapiSchema) {
+    var targetUrl = window.DOCBUDDY_OPENAPI_URL || "/openapi.json";
+    // If the URL changed since last fetch, invalidate the cache
+    if (DocBuddy._cachedOpenapiSchema && DocBuddy._schemaFetchUrl === targetUrl) {
       if (onDone) onDone(DocBuddy._cachedOpenapiSchema);
       return;
     }
+    if (DocBuddy._cachedOpenapiSchema && DocBuddy._schemaFetchUrl !== targetUrl) {
+      DocBuddy._cachedOpenapiSchema = null;
+      DocBuddy._openapiSchemaFetchPromise = null;
+    }
     if (!DocBuddy._openapiSchemaFetchPromise) {
-      DocBuddy._openapiSchemaFetchPromise = fetch(window.DOCBUDDY_OPENAPI_URL || "/openapi.json")
+      var fetchUrl = targetUrl;
+      DocBuddy._schemaFetchUrl = fetchUrl;
+      DocBuddy._openapiSchemaFetchPromise = fetch(fetchUrl)
         .then(function(res) { return res.json(); })
         .then(function(schema) {
-          DocBuddy._cachedOpenapiSchema = schema;
-          DocBuddy._openapiSchemaFetchPromise = null;
+          // Only cache if this fetch is still current (prevents race conditions)
+          if (DocBuddy._schemaFetchUrl === fetchUrl) {
+            DocBuddy._cachedOpenapiSchema = schema;
+            DocBuddy._openapiSchemaFetchPromise = null;
+          }
           return schema;
         })
         .catch(function(err) {
-          DocBuddy._openapiSchemaFetchPromise = null;
+          if (DocBuddy._schemaFetchUrl === fetchUrl) {
+            DocBuddy._openapiSchemaFetchPromise = null;
+          }
           console.warn('Failed to fetch OpenAPI schema:', err);
         });
     }

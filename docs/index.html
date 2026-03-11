@@ -419,7 +419,15 @@
         if (window.DocBuddy) {
           window.DocBuddy._cachedOpenapiSchema = null;
           window.DocBuddy._openapiSchemaFetchPromise = null;
+          window.DocBuddy._schemaFetchUrl = null;
         }
+
+        // Clear stale chat/agent history from previous schema sessions
+        // so the Chat and Agent panels start fresh with the new API context
+        try {
+          localStorage.removeItem('docbuddy-chat-history');
+          localStorage.removeItem('docbuddy-agent-history');
+        } catch(e) {}
 
         // Show the UI
         document.getElementById('docbuddy-landing').style.display = 'none';

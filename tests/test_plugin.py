@@ -1698,6 +1698,26 @@ def test_core_js_defaults_to_openapi_json():
     assert '"/openapi.json"' in js_content
 
 
+def test_core_js_schema_fetch_url_tracking():
+    """Verify core.js tracks _schemaFetchUrl to prevent stale schema race conditions."""
+    client = TestClient(make_app())
+    js_content = client.get("/docbuddy-static/core.js").text
+
+    assert "_schemaFetchUrl" in js_content
+    # Should check that fetch URL matches before caching
+    assert "DocBuddy._schemaFetchUrl === fetchUrl" in js_content
+
+
+def test_standalone_page_clears_history_on_load():
+    """Verify standalone page clears chat/agent history when loading a new schema."""
+    from pathlib import Path
+
+    html = (Path(__file__).parent.parent / "docs" / "index.html").read_text()
+    assert "docbuddy-chat-history" in html
+    assert "docbuddy-agent-history" in html
+    assert "localStorage.removeItem" in html
+
+
 # ── Standalone page tests ─────────────────────────────────────────────────────
 
 

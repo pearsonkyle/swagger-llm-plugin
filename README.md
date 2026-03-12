@@ -9,7 +9,7 @@
 
 > Add an AI assistant to your `/docs` page.
 
-### Try the [Live Demo](https://pearsonkyle.github.io/DocBuddy/)
+### Try the [Standalone Demo](https://pearsonkyle.github.io/DocBuddy/)
 
 ## Installation
 
@@ -37,14 +37,12 @@ That's it! Visit `/docs`
 |---------------|--------------|
 | ![Workflow Panel](examples/workflow.png) | ![LLM Settings](examples/settings.png) |
 
-
 ## Features
 
 - 💬 Chat interface with full OpenAPI context
 - 🤖 LLM Settings panel with local providers (Ollama, LM Studio, vLLM, Custom)
 - 🔗 Tool-calling for API Requests
 - 🎨 Dark/light theme support
-
 
 ## Using the Chat
 
@@ -55,36 +53,22 @@ Ask questions like:
 
 Enable tool calling in the settings to allow the assistant to make API requests on your behalf.
 
+## Standalone Mode
+
+DocBuddy has a standalone webpage (e.g. hosted on GitHub Pages) that connects to any OpenAPI schema and LLM provider. However, due to browser security restrictions (CORS), if you want to use local LLMs, you must run DocBuddy locally instead of from GitHub Pages.
+1.  Run `python3 -m http.server 8080` from the repo root
+2.  Visit in your browser [http://localhost:8080/docs/index.html](http://localhost:8080/docs/index.html)
+
+
 ## LLM Settings
 
-- **Provider**: Choose your local LLM provider (Ollama, LM Studio, vLLM, or Custom)
-- **API URL**: Enter the API endpoint for your LLM (e.g. `http://localhost:1234/v1` for LMStudio)
-- **Test Connection**: Verify that the plugin can connect to your LLM provider and select a model from the drop down after.
+1. Choose your local LLM provider (Ollama, LM Studio, vLLM, or Custom)
+2. Enter the API endpoint for your LLM (e.g. `http://localhost:1234/v1` for LMStudio)
+3. Verify that the plugin can connect to your LLM provider and select a model from the drop down after.
+4. Enable tool calling if you want the assistant to make API requests on your behalf.
 
-Some local LLM providers will require users to enable CORS in their API settings to allow the plugin to connect from the browser.
-
+Some local LLM providers will require users to enable CORS in their API settings to allow the plugin to connect.
 ![](examples/lmstudio_cors.png)
-
-## GitHub Pages (Standalone Mode)
-
-DocBuddy can be used as a standalone page hosted on GitHub Pages at https://pearsonkyle.github.io/DocBuddy/
-
-### Loading Your OpenAPI Schema
-
-1. Enter the URL of your `openapi.json` file (or a `/docs` page)
-2. Click "Load" to explore with AI chat, workflow, and agent panels
-
-### LLM Connection Notes
-
-When using the standalone GitHub Pages version:
-
-- **To connect to localhost LLMs** (Ollama, LM Studio, vLLM): You must run DocBuddy locally instead of from GitHub Pages. Browser security (CORS) prevents web pages hosted on `github.io` from making requests to `localhost`.
-
-  **Solutions:**
-  - Run `python3 -m http.server 8080` from the repo root and visit `http://localhost:8080/docs/index.html`
-  - Deploy using the Python package (`pip install docbuddy`) instead of GitHub Pages
-
-- **To connect to remote LLMs**: No special configuration needed. Just enter the public URL.
 
 ## Demo Server
 

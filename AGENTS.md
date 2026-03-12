@@ -128,6 +128,11 @@ A self-contained GitHub Pages hosted page that loads DocBuddy from CDN, allowing
 - **Shareable URLs**: Updates `?url=` query parameter for bookmarking/sharing loaded APIs
 - **Local dev**: Run `python3 -m http.server 8080` from repo root, then open `http://localhost:8080/docs/index.html`
 
+**CORS Limitation**: When using the GitHub Pages hosted version (`https://pearsonkyle.github.io/DocBuddy/`), you cannot connect to localhost LLMs (Ollama, LM Studio, vLLM) due to browser security restrictions. Browsers block web pages from making requests to `localhost`. To use localhost LLMs:
+
+1. Run DocBuddy locally: `python3 -m http.server 8080` and visit `http://localhost:8080/docs/index.html`
+2. Use the Python package (`pip install docbuddy`) instead of GitHub Pages
+
 ### Template (`src/docbuddy/templates/`)
 
 - **`swagger_ui.html`** — Jinja2 template that:

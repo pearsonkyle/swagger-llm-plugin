@@ -9,6 +9,23 @@
   // Configurable base path for static assets (allows standalone/GitHub Pages usage)
   var STATIC_BASE = window.DOCBUDDY_STATIC_BASE || '/docbuddy-static';
 
+  // ── Default System Prompt Preset Configuration (inline fallback) ──────────
+  var DEFAULT_SYSTEM_PROMPT_CONFIG = {
+    presets: {
+      api_assistant: {
+        name: 'API Assistant',
+        description: 'General API assistant with tool calling support for exploring and testing endpoints',
+        prompt: 'You are a helpful API assistant. The user is looking at an API documentation page for an OpenAPI-compliant REST API.\n\n{openapi_context}\n\nYou can help the user understand endpoints, generate curl commands, explain request/response formats, and provide usage examples. You also have access to the `api_request` tool to execute API calls. When the user asks you to call an endpoint, use the tool instead of just showing a curl command. If a tool call returns an error, you may retry with corrected parameters.\n\n## Tool Calling Instructions\n\nYou have access to a tool called `api_request` that allows you to execute HTTP requests against the API. Use this tool when:\n\n- The user asks you to test an endpoint\n- The user wants to see data from the API\n- You need to verify how an endpoint works\n- Any situation where executing a real API call is helpful\n\n### Tool Call Format\n\nWhen using the `api_request` tool, respond with a JSON object containing your tool call:\n\n```json\n{\n  "tool_calls": [\n    {\n      "id": "call_123",\n      "type": "function",\n      "function": {\n        "name": "api_request",\n        "arguments": {\n          "method": "GET",\n          "path": "/users/{id}",\n          "query_params": {\n            "limit": "10"\n          },\n          "path_params": {\n            "id": "123"\n          }\n        }\n      }\n    }\n  ]\n}\n```\n\n### Tool Arguments Reference\n\n| Argument | Type | Description |\n|----------|------|-------------|\n| `method` | string | HTTP method: GET, POST, PUT, PATCH, DELETE |\n| `path` | string | API endpoint path (e.g., `/users`, `/users/{id}`) |\n| `query_params` | object | Query string parameters as key-value pairs |\n| `path_params` | object | Path template parameters to substitute |\n| `body` | object | JSON request body (for POST/PUT/PATCH) |\n\n### Important Guidelines\n\n1. **Always use the tool** when appropriate - don\'t just explain how to make the request\n2. **Fill in path parameters** before using `path` (e.g., `/users/123` instead of `/users/{id}`)\n3. **Set the correct HTTP method** - GET for reading, POST/PUT/PATCH for creating/updating\n4. **Provide all required arguments** - method and path are always required\n5. **Don\'t include Authorization header** - the system handles authentication automatically'
+      },
+      agent: {
+        name: 'Agent',
+        description: 'Autonomous task execution with Plan/Act workflow mode',
+        prompt: 'You are an autonomous AI agent designed to help users complete tasks using API endpoints.\n\n{openapi_context}\n\n## Agent Workflow\n\nFollow this structured approach for all user requests:\n\n1. **Clarification Phase**: Ask up to 3 targeted questions to understand the task requirements\n2. **Planning Phase**: Outline a step-by-step plan using available API tools\n3. **Execution Phase**: Execute the plan iteratively (max 5 tool calls)\n4. **Delivery Phase**: Synthesize and deliver the final output\n\n## Tool Calling Instructions\n\nYou have access to a tool called `api_request` that allows you to execute HTTP requests against the API.\n\n### Tool Call Format\n\n```json\n{\n  "tool_calls": [\n    {\n      "id": "call_123",\n      "type": "function",\n      "function": {\n        "name": "api_request",\n        "arguments": {\n          "method": "GET",\n          "path": "/users/{id}",\n          "query_params": { "limit": "10" },\n          "path_params": { "id": "123" }\n        }\n      }\n    }\n  ]\n}\n```\n\n### Execution Guidelines\n\n- Execute tool calls automatically without asking for confirmation\n- Retry failed tool calls up to 3 times with corrected parameters\n- If you need more information, ask targeted questions in the thought field before executing'
+      }
+    },
+    defaultPreset: 'api_assistant'
+  };
+
   // ── System Prompt Preset Configuration (load from JSON) ───────────────────
   var SYSTEM_PROMPT_CONFIG = null;
   var _systemPromptConfigPromise = null;
@@ -24,13 +41,16 @@
           return res.json();
         })
         .then(function(data) {
-          SYSTEM_PROMPT_CONFIG = data;
-          return data;
+          // Merge loaded config with defaults to ensure required presets exist
+          SYSTEM_PROMPT_CONFIG = data ? mergeWithDefaults(data) : DEFAULT_SYSTEM_PROMPT_CONFIG;
+          return SYSTEM_PROMPT_CONFIG;
         })
         .catch(function(err) {
-          console.error('Failed to load system-prompt-config.json:', err);
-          _systemPromptConfigPromise = null;
-          return null;
+          console.warn('Failed to load system-prompt-config.json, using inline defaults:', err);
+          // Use inline default config when fetch fails (GitHub Pages, CDN issues)
+          SYSTEM_PROMPT_CONFIG = DEFAULT_SYSTEM_PROMPT_CONFIG;
+          _systemPromptConfigPromise = Promise.resolve(SYSTEM_PROMPT_CONFIG);
+          return SYSTEM_PROMPT_CONFIG;
         });
     }
 
@@ -42,6 +62,18 @@
   DocBuddy.loadSystemPromptConfig = loadSystemPromptConfig;
 
   /**
+   * Merge loaded config with defaults to ensure required presets exist
+   */
+  function mergeWithDefaults(loaded) {
+    var merged = Object.assign({}, DEFAULT_SYSTEM_PROMPT_CONFIG, loaded);
+    // Ensure presets object exists and merge
+    if (loaded.presets) {
+      merged.presets = Object.assign({}, DEFAULT_SYSTEM_PROMPT_CONFIG.presets, loaded.presets);
+    }
+    return merged;
+  }
+
+  /**
    * Returns a Promise that resolves to the system prompt config.
    * Use this instead of loadSystemPromptConfig() when you need the actual loaded data.
    */
@@ -50,7 +82,7 @@
     if (_systemPromptConfigPromise) return _systemPromptConfigPromise;
     // Kick off loading
     loadSystemPromptConfig();
-    return _systemPromptConfigPromise || Promise.resolve(null);
+    return _systemPromptConfigPromise || Promise.resolve(DEFAULT_SYSTEM_PROMPT_CONFIG);
   }
   DocBuddy.ensureSystemPromptConfig = ensureSystemPromptConfig;
 

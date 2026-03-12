@@ -145,6 +145,28 @@
           .catch(function (err) {
             clearTimeout(timeoutId);
             var errorMsg = err.name === 'AbortError' ? 'Connection timed out (10s)' : (err.message || "Connection failed");
+
+            // Detect CORS errors and provide helpful guidance
+            if (!navigator.onLine) {
+              errorMsg = 'No internet connection. Please check your network.';
+            } else if (errorMsg.includes('Failed to fetch') || err.name === 'TypeError') {
+              // This is likely a CORS error when fetching from GitHub Pages to localhost
+              var baseUrlUrl;
+              try { baseUrlUrl = new URL(baseUrl + '/models'); }
+              catch(e) { baseUrlUrl = null; }
+
+              if (baseUrlUrl && (baseUrlUrl.hostname === 'localhost' || baseUrlUrl.hostname === '127.0.0.1')) {
+                errorMsg = 'CORS Error: Cannot connect to localhost from GitHub Pages.\n\n' +
+                  'This is a browser security feature. Solutions:\n' +
+                  '1. Run DocBuddy locally (not from GitHub Pages) when using localhost LLMs\n' +
+                  '2. Use a proxy server to forward requests\n' +
+                  '3. Enable CORS on your LLM provider';
+              } else {
+                errorMsg = 'Connection failed. Check your LLM provider URL and API key.\n\n' +
+                  'If connecting to localhost, note: GitHub Pages cannot directly access localhost due to browser security restrictions.';
+              }
+            }
+
             self.setState({ connectionStatus: "error", lastError: errorMsg });
             DB.dispatchAction(system, 'setConnectionStatus', "error");
           });

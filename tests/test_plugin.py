@@ -1796,3 +1796,96 @@ def test_standalone_page_has_docbuddy_plugin():
     html = (Path(__file__).parent.parent / "docs" / "index.html").read_text()
     assert "DocBuddyPlugin" in html
     assert "LLMDocsLayout" in html
+
+
+# ── CLI tests ──────────────────────────────────────────────────────────────────
+
+
+def test_cli_standalone_html_is_packaged():
+    """Verify standalone.html is shipped inside the docbuddy package."""
+    from importlib.resources import files
+
+    pkg_ref = files("docbuddy")
+    standalone_ref = pkg_ref.joinpath("standalone.html")
+    assert standalone_ref.is_file(), "standalone.html must be present in the installed package"
+
+
+def test_cli_standalone_html_uses_local_static_path():
+    """standalone.html must load JS from ./static (not from the repo root path)."""
+    from importlib.resources import files
+
+    pkg_ref = files("docbuddy")
+    html = pkg_ref.joinpath("standalone.html").read_text(encoding="utf-8")
+    assert "./static" in html, "standalone.html should reference './static' for local assets"
+    assert "../src/docbuddy/static" not in html, (
+        "standalone.html must not reference the repo-layout path ../src/docbuddy/static"
+    )
+
+
+def test_cli_main_exits_on_missing_standalone(monkeypatch):
+    """main() must exit with a clear message when standalone.html is missing."""
+    import sys
+    from unittest.mock import MagicMock
+
+    import pytest
+
+    import docbuddy.cli as cli_module
+
+    # Patch `files` as it is imported in cli.py (must patch the name in that module)
+    fake_ref = MagicMock()
+    fake_ref.__str__ = lambda _: "/fake/pkg"
+    fake_file = MagicMock()
+    fake_file.is_file.return_value = False
+    fake_ref.joinpath.return_value = fake_file
+
+    monkeypatch.setattr(cli_module, "files", lambda _pkg: fake_ref)
+    monkeypatch.setattr(sys, "argv", ["docbuddy"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli_module.main()
+    assert exc_info.value.code == 1
+
+
+def test_cli_uses_directory_not_chdir(monkeypatch):
+    """main() must not call os.chdir; it must pass directory= to the HTTP handler."""
+    import functools
+    import sys
+    from unittest.mock import MagicMock, patch
+
+    import docbuddy.cli as cli_module
+
+    # Stub out standalone.html lookup so it succeeds
+    fake_ref = MagicMock()
+    fake_ref.__str__ = lambda _: "/fake/pkg"
+    fake_file = MagicMock()
+    fake_file.is_file.return_value = True
+    fake_ref.joinpath.return_value = fake_file
+
+    monkeypatch.setattr(cli_module, "files", lambda _pkg: fake_ref)
+    monkeypatch.setattr(sys, "argv", ["docbuddy"])
+
+    # Capture the handler passed to HTTPServer to verify directory= is set
+    captured_handler = {}
+
+    def fake_http_server(addr, handler):
+        captured_handler["handler"] = handler
+        mock_httpd = MagicMock()
+        mock_httpd.__enter__ = lambda s: s
+        mock_httpd.__exit__ = MagicMock(return_value=False)
+        mock_httpd.serve_forever.side_effect = KeyboardInterrupt
+        return mock_httpd
+
+    with (
+        patch("http.server.HTTPServer", side_effect=fake_http_server),
+        patch("webbrowser.open"),
+    ):
+        try:
+            cli_module.main()
+        except SystemExit:
+            pass
+
+    handler = captured_handler.get("handler")
+    assert handler is not None, "HTTPServer must be called with a handler"
+    # The handler must be a functools.partial with directory= keyword set
+    assert isinstance(handler, functools.partial), "handler must be a functools.partial"
+    assert "directory" in handler.keywords, "handler must have directory= keyword argument"

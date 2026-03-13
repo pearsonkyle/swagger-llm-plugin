@@ -2,11 +2,12 @@
 """CLI entry point for launching DocBuddy standalone webpage."""
 
 import argparse
+import functools
 import http.server
-import os
 import sys
+import threading
+import time
 import webbrowser
-
 from importlib.resources import files
 
 
@@ -33,36 +34,30 @@ def main():
 
     args = parser.parse_args()
 
-    # Use importlib.resources to find the docs directory
-    docbuddy_pkg = files("docbuddy")
+    # Locate packaged assets via importlib.resources (works for both editable
+    # and normal pip installs; no os.chdir() needed).
+    pkg_ref = files("docbuddy")
+    standalone_ref = pkg_ref.joinpath("standalone.html")
 
-    # The docs directory is at the project root, one level up from src/docbuddy
-    # When installed, it's in site-packages/docbuddy/../..
-    docs_path = docbuddy_pkg.parent.parent / "docs"
-
-    if not docs_path.exists():
-        print(f"Error: Could not find 'docs' directory at {docs_path}", file=sys.stderr)
+    if not standalone_ref.is_file():
+        print(
+            f"Error: Could not find 'standalone.html' in the docbuddy package ({pkg_ref})",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
-    # Serve from the project root (parent of docs) so static files are accessible
-    # The index.html uses paths like /src/docbuddy/static/core.js which need the parent
-    os.chdir(docs_path.parent)
+    # Serve only the package directory – not the whole repo/site-packages root.
+    pkg_dir = str(pkg_ref)
+    handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=pkg_dir)
 
-    url = f"http://{args.host}:{args.port}/docs/index.html"
+    url = f"http://{args.host}:{args.port}/standalone.html"
 
     print(f"Serving DocBuddy at {url}")
     print("Press Ctrl+C to stop the server")
 
-    # Start HTTP server
-    with http.server.HTTPServer(
-        (args.host, args.port), http.server.SimpleHTTPRequestHandler
-    ) as httpd:
-        # Give it a moment for server to fully start before opening browser
-        import threading
+    with http.server.HTTPServer((args.host, args.port), handler) as httpd:
 
         def open_browser():
-            import time
-
             time.sleep(0.5)
             webbrowser.open(url)
 

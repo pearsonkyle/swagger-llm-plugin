@@ -64,7 +64,7 @@ pip install docbuddy
 docbuddy
 ```
 
-This starts a local server on port **8008** and opens your browser to [http://localhost:8008/docs/index.html](http://localhost:8008/docs/index.html).
+This starts a local server on port **8008** and opens your browser to `http://localhost:8008/standalone.html`.
 
 #### Custom Host/Port
 

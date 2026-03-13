@@ -1807,7 +1807,9 @@ def test_cli_standalone_html_is_packaged():
 
     pkg_ref = files("docbuddy")
     standalone_ref = pkg_ref.joinpath("standalone.html")
-    assert standalone_ref.is_file(), "standalone.html must be present in the installed package"
+    assert (
+        standalone_ref.is_file()
+    ), "standalone.html must be present in the installed package"
 
 
 def test_cli_standalone_html_uses_local_static_path():
@@ -1816,10 +1818,12 @@ def test_cli_standalone_html_uses_local_static_path():
 
     pkg_ref = files("docbuddy")
     html = pkg_ref.joinpath("standalone.html").read_text(encoding="utf-8")
-    assert "./static" in html, "standalone.html should reference './static' for local assets"
-    assert "../src/docbuddy/static" not in html, (
-        "standalone.html must not reference the repo-layout path ../src/docbuddy/static"
-    )
+    assert (
+        "./static" in html
+    ), "standalone.html should reference './static' for local assets"
+    assert (
+        "../src/docbuddy/static" not in html
+    ), "standalone.html must not reference the repo-layout path ../src/docbuddy/static"
 
 
 def test_cli_main_exits_on_missing_standalone(monkeypatch):
@@ -1888,4 +1892,6 @@ def test_cli_uses_directory_not_chdir(monkeypatch):
     assert handler is not None, "HTTPServer must be called with a handler"
     # The handler must be a functools.partial with directory= keyword set
     assert isinstance(handler, functools.partial), "handler must be a functools.partial"
-    assert "directory" in handler.keywords, "handler must have directory= keyword argument"
+    assert (
+        "directory" in handler.keywords
+    ), "handler must have directory= keyword argument"

@@ -449,7 +449,12 @@
               }
             } catch (e) { console.warn('Failed to apply query params:', e); }
 
-            url = window.location.origin + url;
+            // Get the base URL from the OpenAPI schema if available, otherwise fall back to page origin
+            var apiBaseUrl = '';
+            if (DB._cachedOpenapiSchema && DB._cachedOpenapiSchema.servers && DB._cachedOpenapiSchema.servers.length > 0) {
+              apiBaseUrl = DB._cachedOpenapiSchema.servers[0].url.replace(/\/+$/, '');
+            }
+            url = (apiBaseUrl || window.location.origin) + url;
 
             var toolFetchHeaders = {};
             var tSettings = DB.loadToolSettings();

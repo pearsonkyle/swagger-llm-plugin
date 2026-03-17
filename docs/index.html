@@ -714,7 +714,22 @@ app = <span class="fn">FastAPI</span>()
        */
       function loadUrl(url) {
         document.getElementById('url-input').value = url;
-        handleLoad();
+
+        // Wait for DocBuddyPlugin to be available before loading
+        if (typeof DocBuddyPlugin === 'undefined' || typeof SwaggerUIBundle === 'undefined') {
+          showError('Loading... Please wait a moment and try again.');
+
+          function waitForScripts() {
+            if (typeof DocBuddyPlugin !== 'undefined' && typeof SwaggerUIBundle !== 'undefined') {
+              handleLoad();
+            } else {
+              setTimeout(waitForScripts, 50);
+            }
+          }
+          setTimeout(waitForScripts, 100);
+        } else {
+          handleLoad();
+        }
       }
 
       /**
@@ -738,6 +753,7 @@ app = <span class="fn">FastAPI</span>()
 
         if (urlParam) {
           document.getElementById('url-input').value = urlParam;
+
           // Wait for DocBuddyPlugin to be available before loading
           function tryLoad() {
             if (typeof DocBuddyPlugin !== 'undefined' && typeof SwaggerUIBundle !== 'undefined') {
@@ -746,10 +762,23 @@ app = <span class="fn">FastAPI</span>()
               setTimeout(tryLoad, 50);
             }
           }
+
           if (document.readyState === 'complete') {
-            tryLoad();
+            if (typeof DocBuddyPlugin === 'undefined' || typeof SwaggerUIBundle === 'undefined') {
+              showError('Loading... Please wait a moment and try again.');
+              setTimeout(tryLoad, 100);
+            } else {
+              tryLoad();
+            }
           } else {
-            window.addEventListener('load', tryLoad);
+            window.addEventListener('load', function() {
+              if (typeof DocBuddyPlugin === 'undefined' || typeof SwaggerUIBundle === 'undefined') {
+                showError('Loading... Please wait a moment and try again.');
+                setTimeout(tryLoad, 100);
+              } else {
+                tryLoad();
+              }
+            });
           }
         }
       })();

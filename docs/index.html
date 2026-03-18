@@ -689,6 +689,48 @@ app = <span class="fn">FastAPI</span>()
           localStorage.removeItem('docbuddy-agent-history');
         } catch(e) {}
 
+        // ── Fetch interceptor ─────────────────────────────────────────────
+        // The jsDelivr CDN may serve stale versions of chat.js / agent.js /
+        // workflow.js that construct tool-call URLs with:
+        //     url = window.location.origin + "/api/path"
+        // On GitHub Pages that resolves to pearsonkyle.github.io instead of
+        // the actual API server.  We wrap window.fetch (once) so that any
+        // request aimed at the GitHub Pages origin that looks like an API
+        // call is transparently rewritten to the correct API base URL.
+        // This is a no-op when the page is served from the same origin as
+        // the API (pip install / docbuddy CLI).
+        if (detectedApiBase && !window._docbuddyFetchInterceptorInstalled) {
+          (function() {
+            var ghOrigin = window.location.origin;          // e.g. https://pearsonkyle.github.io
+            var ghPathPrefix = window.location.pathname      // e.g. /DocBuddy/
+                                  .replace(/\/[^\/]*$/, '/'); // strip filename, keep dir
+            var _originalFetch = window.fetch;
+
+            window.fetch = function(input, init) {
+              if (typeof input === 'string' && window.DOCBUDDY_API_BASE_URL) {
+                // Only intercept requests aimed at GitHub Pages origin
+                if (input.startsWith(ghOrigin + '/')) {
+                  var relPath = input.substring(ghOrigin.length); // e.g. /v2/status/news
+
+                  // Skip static resources & DocBuddy's own assets
+                  var isStatic = /\.(js|css|json|html|ico|png|svg|woff2?)(\?|$)/i.test(relPath)
+                              || relPath.startsWith(ghPathPrefix)
+                              || relPath.startsWith('/docbuddy-static/');
+
+                  if (!isStatic) {
+                    var newUrl = window.DOCBUDDY_API_BASE_URL.replace(/\/+$/, '') + relPath;
+                    console.debug('[DocBuddy] Rewriting API call:', input, '→', newUrl);
+                    return _originalFetch.call(this, newUrl, init);
+                  }
+                }
+              }
+              return _originalFetch.call(this, input, init);
+            };
+
+            window._docbuddyFetchInterceptorInstalled = true;
+          })();
+        }
+
         // Show the UI
         document.getElementById('docbuddy-landing').style.display = 'none';
         document.getElementById('swagger-ui').style.display = 'block';

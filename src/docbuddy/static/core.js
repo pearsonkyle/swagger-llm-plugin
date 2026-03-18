@@ -97,6 +97,158 @@
   }
   DocBuddy.ensureSystemPromptConfig = ensureSystemPromptConfig;
 
+  /**
+   * Resolve the API base URL for tool calls.
+   * Priority order:
+   * 1. User-configured API Base URL (from Settings, highest priority)
+   * 2a. OpenAPI 3.0+ schema servers array (first valid absolute URL)
+   * 2b. Swagger 2.0 host / basePath / schemes fields
+   * 3. Auto-detect from loaded schema URL (origin of schema file)
+   * 4. Fallback: window.location.origin (only for same-origin deployments like pip/CLI)
+   *
+   * @param {Object} schema - The OpenAPI schema object (may be OpenAPI 3.0+ or Swagger 2.0)
+   * @returns {string} The resolved base URL with trailing slash removed
+   */
+  function resolveApiBaseUrl(schema) {
+    // Step 0: Check global DOCBUDDY_API_BASE_URL (set by standalone pages at schema-load time).
+    // This takes top priority in standalone mode because it's set once with the correct
+    // detected value and doesn't depend on localStorage or schema parsing.
+    var globalApiBase = window.DOCBUDDY_API_BASE_URL;
+    if (globalApiBase && typeof globalApiBase === 'string' && globalApiBase.trim()) {
+      var globalTrimmed = globalApiBase.trim().replace(/\/+$/, '');
+      if (globalTrimmed.startsWith('http://') || globalTrimmed.startsWith('https://')) {
+        console.debug('[API Base URL] Step 0 - Using global DOCBUDDY_API_BASE_URL:', globalTrimmed);
+        return globalTrimmed;
+      }
+    }
+
+    // Step 1: Check user-configured API Base URL (highest priority, applies in all modes)
+    var userConfiguredUrl = loadApiBaseUrl();
+    if (userConfiguredUrl && typeof userConfiguredUrl === 'string' && userConfiguredUrl.trim()) {
+      var trimmed = userConfiguredUrl.trim().replace(/\/+$/, '');
+      if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+        console.debug('[API Base URL] Step 1 - Using user-configured:', trimmed);
+        return trimmed;
+      }
+    }
+
+    // For pip-installed / same-origin deployments (DOCBUDDY_VERSION !== 'standalone'),
+    // ALWAYS use window.location.origin — the docbuddy server IS the API server.
+    // Schema-based URL detection only makes sense for standalone/GitHub Pages mode
+    // where the page is served from a different host than the target API.
+    // Step 4: Same-origin deployment fallback (checked early to preserve original behavior)
+    if (window.DOCBUDDY_VERSION !== 'standalone') {
+      var sameOriginBase = window.location.origin.replace(/\/+$/, '');
+      console.debug('[API Base URL] Step 4 - Same-origin deployment, using page origin:', sameOriginBase);
+      return sameOriginBase;
+    }
+
+    // Steps 2a, 2b, 3 only apply in standalone mode (GitHub Pages / CLI standalone page).
+
+    // Step 2a: Swagger 2.0 — host + basePath + schemes (checked first for Swagger 2.0 schemas
+    // because basePath is authoritative; a servers[] entry may omit the base path prefix)
+    // Note: per the Swagger 2.0 spec, "host" is OPTIONAL — when absent, the host serving
+    // the documentation is assumed. We infer it from the schema file URL in that case.
+    if (schema && schema.swagger) {
+      var swaggerHost = schema.host;
+      // If host is omitted, infer from the schema file URL's host
+      if (!swaggerHost) {
+        var inferredOrigin = resolveSchemaOrigin();
+        if (inferredOrigin) {
+          try { swaggerHost = new URL(inferredOrigin).host; } catch (e) {}
+        }
+      }
+      if (swaggerHost) {
+        var swaggerScheme = 'https';
+        if (schema.schemes && schema.schemes.length > 0) {
+          // Prefer https over http when both are listed
+          swaggerScheme = schema.schemes.indexOf('https') >= 0 ? 'https' : schema.schemes[0];
+        }
+        var swaggerBase = swaggerScheme + '://' + swaggerHost;
+        if (schema.basePath && schema.basePath !== '/') {
+          swaggerBase += schema.basePath.replace(/\/+$/, '');
+        }
+        console.debug('[API Base URL] Step 2a - Using Swagger 2.0 host+basePath:', swaggerBase);
+        return swaggerBase;
+      }
+    }
+
+    // Step 2b: Check OpenAPI 3.0+ schema servers array
+    if (schema && schema.servers && schema.servers.length > 0) {
+      for (var i = 0; i < schema.servers.length; i++) {
+        var serverUrl = (schema.servers[i].url || '').trim();
+        // Only use absolute URLs with protocol
+        if (serverUrl.startsWith('http://') || serverUrl.startsWith('https://')) {
+          console.debug('[API Base URL] Step 2b - Using schema servers[' + i + ']:', serverUrl.replace(/\/+$/, ''));
+          return serverUrl.replace(/\/+$/, '');
+        }
+      }
+
+      // Handle relative server URLs: resolve against the schema file's origin
+      var firstServerUrl = (schema.servers[0].url || '').trim();
+      if (firstServerUrl) {
+        var schemaOrigin = resolveSchemaOrigin();
+        if (schemaOrigin) {
+          var relPath = firstServerUrl.startsWith('/') ? firstServerUrl : '/' + firstServerUrl;
+          var resolved2b = (schemaOrigin + relPath).replace(/\/+$/, '');
+          console.debug('[API Base URL] Step 2b - Resolved relative server URL:', resolved2b);
+          return resolved2b;
+        }
+      }
+    }
+
+    // Step 3: Auto-detect from the schema file URL (use its origin as the API origin)
+    var detectedOrigin = resolveSchemaOrigin();
+    if (detectedOrigin) {
+      console.debug('[API Base URL] Step 3 - Auto-detected origin from schema URL:', detectedOrigin);
+      return detectedOrigin;
+    }
+
+    // Step 4: Context-aware fallback
+    // For pip-installed / docbuddy CLI deployments, window.location.origin IS the API server.
+    // For GitHub Pages / standalone, window.location.origin is the hosting site, NOT the API.
+    if (window.DOCBUDDY_VERSION === 'standalone') {
+      // Last resort for standalone: try the raw DOCBUDDY_OPENAPI_URL origin
+      var openapiUrl = window.DOCBUDDY_OPENAPI_URL || '';
+      if (openapiUrl.startsWith('http://') || openapiUrl.startsWith('https://')) {
+        try {
+          var fallbackOrigin = new URL(openapiUrl).origin;
+          console.warn('[API Base URL] Step 4 (standalone fallback) - Using schema URL origin:', fallbackOrigin,
+            '\nConsider setting "API Base URL" in Settings for more accurate routing.');
+          return fallbackOrigin;
+        } catch (e) {}
+      }
+      console.error('[API Base URL] Step 4 - Could not determine API base URL for standalone mode.',
+        'Please set "API Base URL" in the Settings tab.');
+      return '';
+    }
+
+    // Same-origin deployment (pip install / docbuddy CLI)
+    console.debug('[API Base URL] Step 4 - Same-origin deployment, using page origin:', window.location.origin);
+    return window.location.origin.replace(/\/+$/, '');
+  }
+  DocBuddy.resolveApiBaseUrl = resolveApiBaseUrl;
+
+  /**
+   * Extract just the origin (scheme + host) from the currently loaded OpenAPI schema URL.
+   * E.g., https://stablehorde.net/api/swagger.json → https://stablehorde.net
+   *
+   * Returns null if the URL is relative or cannot be parsed.
+   */
+  function resolveSchemaOrigin() {
+    var targetUrl = window.DOCBUDDY_OPENAPI_URL || '';
+
+    if (!targetUrl || (!targetUrl.startsWith('http://') && !targetUrl.startsWith('https://'))) {
+      return null;
+    }
+
+    try {
+      return new URL(targetUrl).origin;
+    } catch (e) {
+      return null;
+    }
+  }
+
   // ── Get system prompt for a preset ────────────────────────────────────────
   function getSystemPromptForPreset(presetName, openapiSchema, customPromptText) {
     // Handle custom user-provided prompt
@@ -388,7 +540,14 @@
   }
 
   function buildCurlCommand(method, path, queryParams, pathParams, body) {
+    // Resolve relative paths to full URLs using the API base URL
     var url = path;
+    if (url && /^\//.test(url)) {
+      var base = resolveApiBaseUrl(DocBuddy._cachedOpenapiSchema);
+      if (base) {
+        url = base.replace(/\/+$/, '') + url;
+      }
+    }
     if (queryParams && Object.keys(queryParams).length > 0) {
       var qs = Object.keys(queryParams).map(function(k) {
         return encodeURIComponent(k) + '=' + encodeURIComponent(queryParams[k]);
@@ -597,6 +756,8 @@
   var TOOL_SETTINGS_KEY = "docbuddy-tool-settings";
   var WORKFLOW_STORAGE_KEY = 'docbuddy-workflow';
   var AGENT_HISTORY_KEY = 'docbuddy-agent-history';
+  var API_BASE_URL_KEY = "docbuddy-api-base-url";
+  var AUTO_DETECT_API_URL_KEY = "docbuddy-auto-detect-api-url";
 
   // ── In-memory cache for OpenAPI schema ────────────────────────────────────
   DocBuddy._cachedOpenapiSchema = null;
@@ -753,6 +914,45 @@
   }
   DocBuddy.saveToolSettings = saveToolSettings;
 
+  // ── API Base URL helpers ───────────────────────────────────────────────────
+  function loadApiBaseUrl() {
+    try {
+      var raw = localStorage.getItem(API_BASE_URL_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch (e) {
+      return null;
+    }
+  }
+  DocBuddy.loadApiBaseUrl = loadApiBaseUrl;
+
+  function saveApiBaseUrl(url) {
+    try {
+      localStorage.setItem(API_BASE_URL_KEY, JSON.stringify(url));
+    } catch (e) {
+      // ignore
+    }
+  }
+  DocBuddy.saveApiBaseUrl = saveApiBaseUrl;
+
+  function loadAutoDetectApiUrl() {
+    try {
+      var raw = localStorage.getItem(AUTO_DETECT_API_URL_KEY);
+      return raw ? JSON.parse(raw) : true;
+    } catch (e) {
+      return true;
+    }
+  }
+  DocBuddy.loadAutoDetectApiUrl = loadAutoDetectApiUrl;
+
+  function saveAutoDetectApiUrl(enabled) {
+    try {
+      localStorage.setItem(AUTO_DETECT_API_URL_KEY, JSON.stringify(enabled));
+    } catch (e) {
+      // ignore
+    }
+  }
+  DocBuddy.saveAutoDetectApiUrl = saveAutoDetectApiUrl;
+
   // ── Workflow storage helpers ────────────────────────────────────────────────
   function loadWorkflow() {
     try {
@@ -817,6 +1017,7 @@
   // ── Default state ───────────────────────────────────────────────────────────
   var storedSettings = loadFromStorage();
   var storedTheme = loadTheme();
+  var storedToolSettings = loadToolSettings();
 
   document.addEventListener('DOMContentLoaded', function() {
     window.applyLLMTheme(storedTheme.theme, storedTheme.customColors);
@@ -838,6 +1039,10 @@
     lastError: "",
     theme: storedTheme.theme || "light",
     customColors: storedTheme.customColors || {},
+    // Tool settings
+    enableTools: storedToolSettings.enableTools || false,
+    autoExecute: storedToolSettings.autoExecute || false,
+    toolApiKey: storedToolSettings.apiKey || '',
   };
   DocBuddy.DEFAULT_STATE = DEFAULT_STATE;
 
@@ -939,6 +1144,10 @@
     setOpenApiSchema: function (schema) { return { type: SET_OPENAPI_SCHEMA, payload: schema }; },
     setTheme: function (value) { return { type: SET_THEME, payload: value }; },
     setCustomColor: function (value) { return { type: SET_CUSTOM_COLOR, payload: value }; },
+    // Tool settings actions
+    setEnableTools: function (value) { return { type: 'LLM_SET_ENABLE_TOOLS', payload: value }; },
+    setAutoExecute: function (value) { return { type: 'LLM_SET_AUTO_EXECUTE', payload: value }; },
+    setToolApiKey: function (value) { return { type: 'LLM_SET_TOOL_API_KEY', payload: value }; },
   };
   DocBuddy.actions = actions;
 
@@ -956,6 +1165,10 @@
     getLastError: function (state) { return state.lastError; },
     getTheme: function (state) { return state.theme; },
     getCustomColors: function (state) { return state.customColors; },
+    // Tool settings selectors
+    getEnableTools: function (state) { return state.enableTools || false; },
+    getAutoExecute: function (state) { return state.autoExecute || false; },
+    getToolApiKey: function (state) { return state.toolApiKey || ''; },
   };
   DocBuddy.selectors = selectors;
 

@@ -448,7 +448,8 @@
             <span class="copy-hint">Click to copy</span>
           </div>
           <p style="font-size: 12px; color: var(--theme-text-secondary); margin-top: 8px;">
-            Opens at the address shown in the terminal (default port <code>8008</code>)
+            Opens at <code id="local-url"></code>
+            <script>document.getElementById('local-url').textContent = window.location.href;</script>
           </p>
 
           <h3>Python Plugin</h3>
@@ -494,11 +495,12 @@ app = <span class="fn">FastAPI</span>()
 
     <script>
       // Resolve base URL for DocBuddy static assets.
-      // When served locally (e.g. python -m http.server from repo root), use local files.
+      // When served locally (e.g. via `docbuddy` CLI), use local files from the
+      // package directory where static/ is a sibling of standalone.html.
       // Otherwise fall back to jsDelivr CDN for the published GitHub Pages site.
       var IS_LOCAL = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
       var DOCBUDDY_CDN_BASE = 'https://cdn.jsdelivr.net/gh/pearsonkyle/DocBuddy@main/src/docbuddy/static';
-      var DOCBUDDY_LOCAL_BASE = '../src/docbuddy/static';
+      var DOCBUDDY_LOCAL_BASE = './static'; // sibling of standalone.html in the installed package
       var DOCBUDDY_BASE = IS_LOCAL ? DOCBUDDY_LOCAL_BASE : DOCBUDDY_CDN_BASE;
 
       window.DOCBUDDY_STATIC_BASE = DOCBUDDY_BASE;
@@ -595,11 +597,10 @@ app = <span class="fn">FastAPI</span>()
         // Auto-detect and persist the API base URL from the loaded schema.
         // This ensures tool calls in Chat, Agent, and Workflow are routed to
         // the correct API server rather than falling back to window.location.origin
-        // (which would be pearsonkyle.github.io on GitHub Pages).
-        //
+        // (which would be the local CLI server, not the target API).
         // Clear any stale auto-detected API base URL before saving the new one.
-        // This prevents old wrong values from being returned by resolveApiBaseUrl
-        // Step 1 on the next tool call (e.g. after switching schemas).
+        // This prevents old wrong values (e.g. just the origin without basePath)
+        // from being returned by resolveApiBaseUrl Step 1 on the next tool call.
         try { localStorage.removeItem('docbuddy-api-base-url'); } catch(e) {}
 
         try {
@@ -642,9 +643,9 @@ app = <span class="fn">FastAPI</span>()
                 var relServerUrl = (prefetchedSchema.servers[0].url || '').trim();
                 if (relServerUrl) {
                   try {
-                    var schemaOrigin = new URL(schemaUrl).origin;
+                    var schOrigin = new URL(schemaUrl).origin;
                     var relPath = relServerUrl.startsWith('/') ? relServerUrl : '/' + relServerUrl;
-                    detectedApiBase = (schemaOrigin + relPath).replace(/\/+$/, '');
+                    detectedApiBase = (schOrigin + relPath).replace(/\/+$/, '');
                   } catch(e) {}
                 }
               }
@@ -657,25 +658,11 @@ app = <span class="fn">FastAPI</span>()
           }
 
           if (detectedApiBase) {
-            // Set the global variable that resolveApiBaseUrl Step 0 checks.
-            // This works immediately even if core.js is CDN-cached (old version),
-            // because docs/index.html is served directly by GitHub Pages.
+            // Set global variable for resolveApiBaseUrl Step 0
             window.DOCBUDDY_API_BASE_URL = detectedApiBase;
 
             if (window.DocBuddy && typeof window.DocBuddy.saveApiBaseUrl === 'function') {
               window.DocBuddy.saveApiBaseUrl(detectedApiBase);
-            }
-
-            // Safety net: monkey-patch resolveApiBaseUrl in case the CDN-cached
-            // core.js doesn't have the Step 0 global check yet.
-            if (window.DocBuddy && typeof window.DocBuddy.resolveApiBaseUrl === 'function') {
-              var _origResolve = window.DocBuddy.resolveApiBaseUrl;
-              window.DocBuddy.resolveApiBaseUrl = function(schema) {
-                if (window.DOCBUDDY_API_BASE_URL) {
-                  return window.DOCBUDDY_API_BASE_URL.replace(/\/+$/, '');
-                }
-                return _origResolve(schema);
-              };
             }
           }
         } catch(e) {
@@ -688,64 +675,6 @@ app = <span class="fn">FastAPI</span>()
           localStorage.removeItem('docbuddy-chat-history');
           localStorage.removeItem('docbuddy-agent-history');
         } catch(e) {}
-
-        // ── Fetch interceptor ─────────────────────────────────────────────
-        // The jsDelivr CDN may serve stale versions of chat.js / agent.js /
-        // workflow.js that construct tool-call URLs with:
-        //     url = window.location.origin + "/api/path"
-        // On GitHub Pages that resolves to pearsonkyle.github.io instead of
-        // the actual API server.  We wrap window.fetch (once) so that any
-        // request aimed at the GitHub Pages origin that looks like an API
-        // call is transparently rewritten to the correct API base URL.
-        // This is a no-op when the page is served from the same origin as
-        // the API (pip install / docbuddy CLI).
-        if (detectedApiBase && !window._docbuddyFetchInterceptorInstalled) {
-          (function() {
-            var ghOrigin = window.location.origin;          // e.g. https://pearsonkyle.github.io
-            var ghPathPrefix = window.location.pathname      // e.g. /DocBuddy/
-                                  .replace(/\/[^\/]*$/, '/'); // strip filename, keep dir
-            var _originalFetch = window.fetch;
-
-            window.fetch = function(input, init) {
-              if (typeof input === 'string' && window.DOCBUDDY_API_BASE_URL) {
-                // Only intercept requests aimed at GitHub Pages origin
-                if (input.startsWith(ghOrigin + '/')) {
-                  var relPath = input.substring(ghOrigin.length); // e.g. /v2/status/news
-
-                  // Skip static resources & DocBuddy's own assets
-                  var isStatic = /\.(js|css|json|html|ico|png|svg|woff2?)(\?|$)/i.test(relPath)
-                              || relPath.startsWith(ghPathPrefix)
-                              || relPath.startsWith('/docbuddy-static/');
-
-                  if (!isStatic) {
-                    var newUrl = window.DOCBUDDY_API_BASE_URL.replace(/\/+$/, '') + relPath;
-                    console.debug('[DocBuddy] Rewriting API call:', input, '→', newUrl);
-                    return _originalFetch.call(this, newUrl, init);
-                  }
-                }
-              }
-              return _originalFetch.call(this, input, init);
-            };
-
-            window._docbuddyFetchInterceptorInstalled = true;
-          })();
-        }
-
-        // ── Monkey-patch buildCurlCommand to show full URL ────────────────
-        // The CDN-cached chat.js / agent.js render tool-call curl commands
-        // via DB.buildCurlCommand(method, path, ...) where `path` is only
-        // the relative API path (e.g. /v2/status/news).  Patch it so the
-        // displayed curl command includes the full URL.
-        if (detectedApiBase && window.DocBuddy && typeof window.DocBuddy.buildCurlCommand === 'function') {
-          var _origBuildCurl = window.DocBuddy.buildCurlCommand;
-          window.DocBuddy.buildCurlCommand = function(method, path, queryParams, pathParams, body) {
-            var fullPath = path;
-            if (window.DOCBUDDY_API_BASE_URL && path && /^\//.test(path)) {
-              fullPath = window.DOCBUDDY_API_BASE_URL.replace(/\/+$/, '') + path;
-            }
-            return _origBuildCurl(method, fullPath, queryParams, pathParams, body);
-          };
-        }
 
         // Show the UI
         document.getElementById('docbuddy-landing').style.display = 'none';
@@ -862,22 +791,7 @@ app = <span class="fn">FastAPI</span>()
        */
       function loadUrl(url) {
         document.getElementById('url-input').value = url;
-
-        // Wait for DocBuddyPlugin to be available before loading
-        if (typeof DocBuddyPlugin === 'undefined' || typeof SwaggerUIBundle === 'undefined') {
-          showError('Loading... Please wait a moment and try again.');
-
-          function waitForScripts() {
-            if (typeof DocBuddyPlugin !== 'undefined' && typeof SwaggerUIBundle !== 'undefined') {
-              handleLoad();
-            } else {
-              setTimeout(waitForScripts, 50);
-            }
-          }
-          setTimeout(waitForScripts, 100);
-        } else {
-          handleLoad();
-        }
+        handleLoad();
       }
 
       /**
@@ -893,21 +807,18 @@ app = <span class="fn">FastAPI</span>()
         btn.innerHTML = 'Load';
         btn.disabled = false;
 
-        // Clear schema-specific state so the next loaded schema starts fresh.
-        // This prevents a previous API's base URL from leaking into the next one.
+        // Clear schema-specific state so the next loaded schema starts fresh
+        window.DOCBUDDY_API_BASE_URL = null;
+        window.DOCBUDDY_OPENAPI_URL = null;
         try { localStorage.removeItem('docbuddy-api-base-url'); } catch(e) {}
         try { localStorage.removeItem('docbuddy-chat-history'); } catch(e) {}
         try { localStorage.removeItem('docbuddy-agent-history'); } catch(e) {}
-
-        // Reset cached schema in DocBuddy namespace
         if (window.DocBuddy) {
           window.DocBuddy._cachedOpenapiSchema = null;
           window.DocBuddy._openapiSchemaFetchPromise = null;
           window.DocBuddy._schemaFetchUrl = null;
           window.DocBuddy._schemaFetchFailed = false;
         }
-        window.DOCBUDDY_OPENAPI_URL = null;
-        window.DOCBUDDY_API_BASE_URL = null;
       }
 
       // ── Auto-load from query parameter on page load ─────────────────────────
@@ -917,7 +828,6 @@ app = <span class="fn">FastAPI</span>()
 
         if (urlParam) {
           document.getElementById('url-input').value = urlParam;
-
           // Wait for DocBuddyPlugin to be available before loading
           function tryLoad() {
             if (typeof DocBuddyPlugin !== 'undefined' && typeof SwaggerUIBundle !== 'undefined') {
@@ -926,23 +836,10 @@ app = <span class="fn">FastAPI</span>()
               setTimeout(tryLoad, 50);
             }
           }
-
           if (document.readyState === 'complete') {
-            if (typeof DocBuddyPlugin === 'undefined' || typeof SwaggerUIBundle === 'undefined') {
-              showError('Loading... Please wait a moment and try again.');
-              setTimeout(tryLoad, 100);
-            } else {
-              tryLoad();
-            }
+            tryLoad();
           } else {
-            window.addEventListener('load', function() {
-              if (typeof DocBuddyPlugin === 'undefined' || typeof SwaggerUIBundle === 'undefined') {
-                showError('Loading... Please wait a moment and try again.');
-                setTimeout(tryLoad, 100);
-              } else {
-                tryLoad();
-              }
-            });
+            window.addEventListener('load', tryLoad);
           }
         }
       })();

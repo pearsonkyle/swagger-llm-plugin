@@ -1796,3 +1796,274 @@ def test_standalone_page_has_docbuddy_plugin():
     html = (Path(__file__).parent.parent / "docs" / "index.html").read_text()
     assert "DocBuddyPlugin" in html
     assert "LLMDocsLayout" in html
+
+
+# ── CLI tests ──────────────────────────────────────────────────────────────────
+
+
+def test_cli_standalone_html_is_packaged():
+    """Verify standalone.html is shipped inside the docbuddy package."""
+    import pathlib
+
+    import docbuddy
+
+    pkg_dir = pathlib.Path(docbuddy.__file__).parent
+    standalone_path = pkg_dir / "standalone.html"
+    assert (
+        standalone_path.is_file()
+    ), "standalone.html must be present in the installed package"
+
+
+def test_cli_standalone_html_uses_local_static_path():
+    """standalone.html must load JS from ./static (not from the repo root path)."""
+    import pathlib
+
+    import docbuddy
+
+    pkg_dir = pathlib.Path(docbuddy.__file__).parent
+    html = (pkg_dir / "standalone.html").read_text(encoding="utf-8")
+    assert (
+        "./static" in html
+    ), "standalone.html should reference './static' for local assets"
+    assert (
+        "../src/docbuddy/static" not in html
+    ), "standalone.html must not reference the repo-layout path ../src/docbuddy/static"
+
+
+def test_cli_main_exits_on_missing_standalone(monkeypatch, tmp_path):
+    """main() must exit with a clear message when standalone.html is missing."""
+    import sys
+
+    import pytest
+
+    import docbuddy.cli as cli_module
+
+    # Point _pkg_dir() at a temporary directory with no standalone.html
+    monkeypatch.setattr(cli_module, "_pkg_dir", lambda: tmp_path)
+    monkeypatch.setattr(sys, "argv", ["docbuddy"])
+
+    with pytest.raises(SystemExit) as exc_info:
+        cli_module.main()
+    assert exc_info.value.code == 1
+
+
+# ── API Base URL resolution tests ─────────────────────────────────────────────
+
+
+def test_resolve_api_base_url_function_exists():
+    """Verify resolveApiBaseUrl function exists in core.js."""
+    client = TestClient(make_app())
+    js_content = client.get("/docbuddy-static/core.js").text
+
+    assert "resolveApiBaseUrl" in js_content
+
+
+def test_resolve_api_base_url_step1_user_configured():
+    """Verify resolveApiBaseUrl checks user-configured API base URL first."""
+    client = TestClient(make_app())
+    js_content = client.get("/docbuddy-static/core.js").text
+
+    # Step 1: User-configured URL should be highest priority
+    assert "loadApiBaseUrl" in js_content
+    assert "Step 1" in js_content
+
+
+def test_resolve_api_base_url_step2a_openapi3_servers():
+    """Verify resolveApiBaseUrl handles Swagger 2.0 host/basePath (Step 2a, checked first)."""
+    client = TestClient(make_app())
+    js_content = client.get("/docbuddy-static/core.js").text
+
+    # Step 2a: OpenAPI 3.0+ servers array
+    assert "schema.servers" in js_content
+    assert "Step 2a" in js_content
+
+
+def test_resolve_api_base_url_step2b_swagger2_host():
+    """Verify resolveApiBaseUrl handles Swagger 2.0 host/basePath/schemes."""
+    client = TestClient(make_app())
+    js_content = client.get("/docbuddy-static/core.js").text
+
+    # Step 2b: Swagger 2.0 fields
+    assert "schema.swagger" in js_content
+    assert "schema.host" in js_content
+    assert "schema.basePath" in js_content
+    assert "Step 2b" in js_content
+
+
+def test_resolve_api_base_url_step3_schema_origin():
+    """Verify resolveApiBaseUrl falls back to schema file origin (Step 3)."""
+    client = TestClient(make_app())
+    js_content = client.get("/docbuddy-static/core.js").text
+
+    assert "resolveSchemaOrigin" in js_content
+    assert "Step 3" in js_content
+
+
+def test_resolve_api_base_url_step4_context_aware_fallback():
+    """Verify resolveApiBaseUrl handles standalone vs same-origin fallback (Step 4)."""
+    client = TestClient(make_app())
+    js_content = client.get("/docbuddy-static/core.js").text
+
+    # Step 4: standalone mode should NOT use window.location.origin
+    assert "DOCBUDDY_VERSION" in js_content
+    assert "standalone" in js_content
+    assert "Step 4" in js_content
+
+
+def test_api_base_url_storage_key_exists():
+    """Verify docbuddy-api-base-url localStorage key is defined."""
+    client = TestClient(make_app())
+    js_content = client.get("/docbuddy-static/core.js").text
+
+    assert "docbuddy-api-base-url" in js_content
+
+
+def test_save_load_api_base_url_functions_exist():
+    """Verify saveApiBaseUrl and loadApiBaseUrl functions exist."""
+    client = TestClient(make_app())
+    js_content = client.get("/docbuddy-static/core.js").text
+
+    assert "saveApiBaseUrl" in js_content
+    assert "loadApiBaseUrl" in js_content
+
+
+def test_resolve_api_base_url_exported_on_docbuddy_namespace():
+    """Verify resolveApiBaseUrl is exported on the DocBuddy namespace."""
+    client = TestClient(make_app())
+    js_content = client.get("/docbuddy-static/core.js").text
+
+    assert "DocBuddy.resolveApiBaseUrl" in js_content
+
+
+def test_chat_tool_call_panel_shows_resolved_url():
+    """Verify chat.js tool call panel shows the resolved full request URL."""
+    client = TestClient(make_app())
+    js_content = client.get("/docbuddy-static/chat.js").text
+
+    # Should call resolveApiBaseUrl and display the composed URL
+    assert "resolveApiBaseUrl" in js_content
+    assert "fullUrl" in js_content
+    # Should warn if the resolved base equals window.location.origin
+    assert "isWarning" in js_content
+    assert "Check API Base URL in Settings" in js_content
+
+
+def test_agent_tool_call_panel_shows_resolved_url():
+    """Verify agent.js tool call panel shows the resolved full request URL."""
+    client = TestClient(make_app())
+    js_content = client.get("/docbuddy-static/agent.js").text
+
+    assert "resolveApiBaseUrl" in js_content
+    assert "fullUrl" in js_content
+    assert "isWarning" in js_content
+
+
+def test_standalone_page_auto_detects_api_base_url():
+    """Verify standalone page saves detected API base URL when loading a schema."""
+    from pathlib import Path
+
+    html = (Path(__file__).parent.parent / "docs" / "index.html").read_text()
+
+    # Should save the detected base URL for use by tool calls
+    assert "saveApiBaseUrl" in html
+    assert "detectedApiBase" in html
+
+
+def test_standalone_page_handles_openapi3_servers():
+    """Verify standalone page extracts base URL from OpenAPI 3.0+ servers array."""
+    from pathlib import Path
+
+    html = (Path(__file__).parent.parent / "docs" / "index.html").read_text()
+
+    assert "prefetchedSchema.servers" in html
+    assert "detectedApiBase" in html
+
+
+def test_standalone_page_handles_swagger2_host():
+    """Verify standalone page extracts base URL from Swagger 2.0 host/basePath."""
+    from pathlib import Path
+
+    html = (Path(__file__).parent.parent / "docs" / "index.html").read_text()
+
+    assert "prefetchedSchema.swagger" in html
+    assert "prefetchedSchema.host" in html
+    assert "prefetchedSchema.basePath" in html
+
+
+def test_standalone_page_clears_api_base_url_on_change():
+    """Verify standalone page clears docbuddy-api-base-url when user navigates away."""
+    from pathlib import Path
+
+    html = (Path(__file__).parent.parent / "docs" / "index.html").read_text()
+
+    # handleChangeUrl should remove the stored API base URL
+    assert "localStorage.removeItem('docbuddy-api-base-url')" in html
+
+
+def test_chat_uses_resolve_api_base_url_for_tool_calls():
+    """Verify chat.js handleExecuteToolCall uses resolveApiBaseUrl instead of window.location.origin."""
+    client = TestClient(make_app())
+    js_content = client.get("/docbuddy-static/chat.js").text
+
+    # Should use the helper, not raw window.location.origin
+    assert "DB.resolveApiBaseUrl" in js_content
+    # Should NOT construct URL from window.location.origin directly
+    assert "window.location.origin + url" not in js_content
+
+
+def test_agent_uses_resolve_api_base_url_for_tool_calls():
+    """Verify agent.js handleExecuteToolCall uses resolveApiBaseUrl instead of window.location.origin."""
+    client = TestClient(make_app())
+    js_content = client.get("/docbuddy-static/agent.js").text
+
+    assert "DB.resolveApiBaseUrl" in js_content
+    assert "window.location.origin + url" not in js_content
+
+
+# ── CLI: existing tests (unchanged) ───────────────────────────────────────────
+
+
+def test_cli_uses_directory_not_chdir(monkeypatch, tmp_path):
+    """main() must not call os.chdir; it must pass directory= to the HTTP handler."""
+    import functools
+    import sys
+    from unittest.mock import MagicMock, patch
+
+    import docbuddy.cli as cli_module
+
+    # Create a fake standalone.html so the existence check passes
+    (tmp_path / "standalone.html").write_text("<html></html>")
+    monkeypatch.setattr(cli_module, "_pkg_dir", lambda: tmp_path)
+    monkeypatch.setattr(sys, "argv", ["docbuddy"])
+
+    # Capture the handler passed to HTTPServer to verify directory= is set
+    captured_handler = {}
+
+    def fake_http_server(addr, handler):
+        captured_handler["handler"] = handler
+        mock_httpd = MagicMock()
+        mock_httpd.__enter__ = lambda s: s
+        mock_httpd.__exit__ = MagicMock(return_value=False)
+        mock_httpd.serve_forever.side_effect = KeyboardInterrupt
+        return mock_httpd
+
+    with (
+        patch("http.server.HTTPServer", side_effect=fake_http_server),
+        patch("webbrowser.open"),
+    ):
+        try:
+            cli_module.main()
+        except SystemExit:
+            pass
+
+    handler = captured_handler.get("handler")
+    assert handler is not None, "HTTPServer must be called with a handler"
+    # The handler must be a functools.partial with directory= keyword set
+    assert isinstance(handler, functools.partial), "handler must be a functools.partial"
+    assert (
+        "directory" in handler.keywords
+    ), "handler must have directory= keyword argument"
+    # directory must point to the package dir (tmp_path in this test)
+    assert handler.keywords["directory"] == str(
+        tmp_path
+    ), "directory= must be the package directory"
